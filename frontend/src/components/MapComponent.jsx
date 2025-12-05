@@ -39,28 +39,27 @@ const getProximityCircleRadius = (level) => {
 const MapComponent = ({
   role,
   buses = [],
-  passengers = [], // Only relevant for driver
+  passengers = [],
   selectedBus = null,
   onBusSelect,
-  onLocationSelect, // Only relevant for passenger/driver route selection (now removed from passenger flow)
+  onLocationSelect,
   pickupLocation = null,
   dropoffLocation = null,
   userLocation = null,
   locationEnabled = true,
   proximityLevel = null,
-  showRouteSelection = false, // New prop for driver
-  proposedRoute = null, // New prop for driver
-  showLocationSelection = false, // New prop for passenger location selection
-  showRouteForSelectedBus = false, // New prop for passenger
-  showAllRoutes = false // Render polylines for all buses when true
-  ,
-  routes = [] // Optional array of routes (from /routes) to render polylines
-  ,
-  onBookTrip // callback(routeTrip) when user wants to book a trip from route popup
+  showRouteSelection = false,
+  proposedRoute = null,
+  showLocationSelection = false,
+  showRouteForSelectedBus = false,
+  showAllRoutes = false,
+  routes = [],
+  onBookTrip
 }) => {
-  const [mapCenter, setMapCenter] = useState([28.0441, 81.0291]); // Default to Butwal, Nepal
+  const [mapCenter, setMapCenter] = useState([28.0441, 81.0291]); // Default
   const [mapZoom, setMapZoom] = useState(13);
-  const [routePolyline, setRoutePolyline] = useState(null); // Store route polyline data
+  const [routePolyline, setRoutePolyline] = useState(null);
+  const mapRef = useRef();
 
   // Fetch route details when selectedBus changes and showRouteForSelectedBus is true
   useEffect(() => {
@@ -72,7 +71,7 @@ const MapComponent = ({
 
     // If selectedBus already contains start/end coords, use them directly
     if (selectedBus.start_location_lat != null && selectedBus.start_location_lng != null &&
-        selectedBus.end_location_lat != null && selectedBus.end_location_lng != null) {
+      selectedBus.end_location_lat != null && selectedBus.end_location_lng != null) {
       setRoutePolyline([
         [selectedBus.start_location_lat, selectedBus.start_location_lng],
         [selectedBus.end_location_lat, selectedBus.end_location_lng]
@@ -93,7 +92,7 @@ const MapComponent = ({
         const routeData = await response.json();
         if (cancelled) return;
         if (routeData.start_location_lat != null && routeData.start_location_lng != null &&
-            routeData.end_location_lat != null && routeData.end_location_lng != null) {
+          routeData.end_location_lat != null && routeData.end_location_lng != null) {
           setRoutePolyline([
             [routeData.start_location_lat, routeData.start_location_lng],
             [routeData.end_location_lat, routeData.end_location_lng]
@@ -118,22 +117,22 @@ const MapComponent = ({
     // Prefer explicit `routes` prop (from /routes endpoint) because that contains start/end coords
     if (routes && routes.length > 0) {
       return routes.reduce((acc, r) => {
-          if (r.start_location_lat != null && r.start_location_lng != null && r.end_location_lat != null && r.end_location_lng != null) {
-            // attach trips that use this route (from buses/trips data)
-            const matchingTrips = (buses || []).filter(b => b.route_id == r.id).map(b => ({
-              id: b.id,
-              tripId: b.id,
-              departure_time: b.departure_time,
-              arrival_time: b.arrival_time,
-              fare: b.fare,
-              available_seats: b.available_seats,
-              plate_number: b.plate_number,
-              driver_name: b.driver_name,
-              currentLocation: b.currentLocation || b.current_location || null
-            }));
+        if (r.start_location_lat != null && r.start_location_lng != null && r.end_location_lat != null && r.end_location_lng != null) {
+          // attach trips that use this route (from buses/trips data)
+          const matchingTrips = (buses || []).filter(b => b.route_id == r.id).map(b => ({
+            id: b.id,
+            tripId: b.id,
+            departure_time: b.departure_time,
+            arrival_time: b.arrival_time,
+            fare: b.fare,
+            available_seats: b.available_seats,
+            plate_number: b.plate_number,
+            driver_name: b.driver_name,
+            currentLocation: b.currentLocation || b.current_location || null
+          }));
 
-            acc.push({ points: [[r.start_location_lat, r.start_location_lng], [r.end_location_lat, r.end_location_lng]], id: r.id, name: r.route_name, trips: matchingTrips });
-          }
+          acc.push({ points: [[r.start_location_lat, r.start_location_lng], [r.end_location_lat, r.end_location_lng]], id: r.id, name: r.route_name, trips: matchingTrips });
+        }
         return acc;
       }, []);
     }
@@ -165,60 +164,74 @@ const MapComponent = ({
     }, []);
   }, [routes, buses]);
 
-  // Update map center based on user location or selected bus
+  // Effect to handle initial centering and updates based on userLocation
   useEffect(() => {
-    if (userLocation && locationEnabled) {
-      setMapCenter([userLocation.lat, userLocation.lng]);
-      setMapZoom(15);
-    } else if (selectedBus) {
-      // Center on selected bus - use current location if available, otherwise use route start
-      let busCenter = null;
+    if (mapRef.current && role === 'driver' && userLocation && locationEnabled) {
+      const map = mapRef.current;
+      // Optionally, only center if the map isn't already centered on a trip
+      // Check if the current map center is significantly different from the user location
+      const currentCenter = map.getCenter();
+      const distance = map.distance(currentCenter, userLocation);
+      // Only re-center if the distance is large (e.g., > 1000 meters)
+      if (distance > 1000) {
+        map.setView([userLocation.lat, userLocation.lng], 15);
+      }
+    }
+  }, [userLocation, locationEnabled, role]); // Depend on userLocation, locationEnabled, and role
+
+  // Effect to handle centering based on selected bus/trip (for drivers and passengers)
+  useEffect(() => {
+    if (!mapRef.current) return;
+
+    // Do NOT update center if driver role and user location is available and enabled (handled above)
+    if (role === 'driver' && userLocation && locationEnabled) {
+      return;
+    }
+
+    let newCenter = null;
+    let newZoom = 13;
+
+    if (selectedBus) {
       if (selectedBus.currentLocation) {
-        busCenter = [selectedBus.currentLocation.lat, selectedBus.currentLocation.lng];
+        newCenter = [selectedBus.currentLocation.lat, selectedBus.currentLocation.lng];
       } else if (selectedBus.start_location_lat && selectedBus.start_location_lng) {
-        busCenter = [selectedBus.start_location_lat, selectedBus.start_location_lng];
+        newCenter = [selectedBus.start_location_lat, selectedBus.start_location_lng];
       }
-      if (busCenter) {
-        setMapCenter(busCenter);
-        setMapZoom(15);
-      }
+      newZoom = 15;
     } else if (buses.length > 0) {
-      // If no bus selected, center on first available bus
       const firstBus = buses[0];
-      let busCenter = null;
       if (firstBus.currentLocation) {
-        busCenter = [firstBus.currentLocation.lat, firstBus.currentLocation.lng];
+        newCenter = [firstBus.currentLocation.lat, firstBus.currentLocation.lng];
       } else if (firstBus.start_location_lat && firstBus.start_location_lng) {
-        busCenter = [firstBus.start_location_lat, firstBus.start_location_lng];
+        newCenter = [firstBus.start_location_lat, firstBus.start_location_lng];
       }
-      if (busCenter) {
-        setMapCenter(busCenter);
-        setMapZoom(13);
-      }
+      newZoom = 13;
     } else if (role === 'passenger' && showLocationSelection && (pickupLocation || dropoffLocation)) {
-      // Center on the midpoint of pickup/dropoff if available (passenger location selection)
       const points = [];
       if (pickupLocation) points.push([pickupLocation.lat, pickupLocation.lng]);
       if (dropoffLocation) points.push([dropoffLocation.lat, dropoffLocation.lng]);
       if (points.length > 0) {
         const avgLat = points.reduce((sum, p) => sum + p[0], 0) / points.length;
         const avgLng = points.reduce((sum, p) => sum + p[1], 0) / points.length;
-        setMapCenter([avgLat, avgLng]);
-        setMapZoom(14); // Slightly zoomed out for location view
+        newCenter = [avgLat, avgLng];
+        newZoom = 14;
       }
     } else if (showRouteSelection && proposedRoute && (proposedRoute.start || proposedRoute.end)) {
-      // Center on the midpoint of proposed route if available
       const points = [];
       if (proposedRoute.start) points.push([proposedRoute.start.lat, proposedRoute.start.lng]);
       if (proposedRoute.end) points.push([proposedRoute.end.lat, proposedRoute.end.lng]);
       if (points.length > 0) {
         const avgLat = points.reduce((sum, p) => sum + p[0], 0) / points.length;
         const avgLng = points.reduce((sum, p) => sum + p[1], 0) / points.length;
-        setMapCenter([avgLat, avgLng]);
-        setMapZoom(14); // Slightly zoomed out for route view
+        newCenter = [avgLat, avgLng];
+        newZoom = 14;
       }
     }
-  }, [userLocation, locationEnabled, selectedBus, showLocationSelection, pickupLocation, dropoffLocation, showRouteSelection, proposedRoute, buses, role]);
+
+    if (newCenter) {
+      mapRef.current.setView(newCenter, newZoom);
+    }
+  }, [userLocation, locationEnabled, role, selectedBus, showLocationSelection, pickupLocation, dropoffLocation, showRouteSelection, proposedRoute, buses]);
 
   // Map Events Component to handle clicks (only if onLocationSelect is provided, e.g., for driver route selection or passenger location selection)
   const MapClickHandler = () => {
@@ -235,10 +248,11 @@ const MapComponent = ({
   // Determine proximity circle color
   const getProxCircleColor = (level) => getProximityCircleColor(level);
   // Determine proximity circle radius
-  const getProxCircleRadius = (level) => getProximityCircleRadius(level);
+  const getProxCircleColorRadius = (level) => getProximityCircleRadius(level);
 
   return (
     <MapContainer
+      ref={mapRef}
       center={mapCenter}
       zoom={mapZoom}
       style={{ height: '100%', width: '100%' }}
@@ -247,7 +261,7 @@ const MapComponent = ({
     >
       <TileLayer
         url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png"
-        attribution='&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors'
+        attribution='&copy; <a href="https://www.openstreetmap.org/copyright  ">OpenStreetMap</a> contributors'
       />
       {onLocationSelect && <MapClickHandler />} {/* Add the click handler only if onLocationSelect is provided */}
 
@@ -287,7 +301,7 @@ const MapComponent = ({
       {role === 'passenger' && pickupLocation && proximityLevel && (
         <Circle
           center={[pickupLocation.lat, pickupLocation.lng]}
-          radius={getProxCircleRadius(proximityLevel)}
+          radius={getProxCircleColorRadius(proximityLevel)}
           color={getProxCircleColor(proximityLevel)}
           fillOpacity={0.1}
         />
@@ -381,7 +395,7 @@ const MapComponent = ({
       {buses.map((bus) => {
         // Display bus at current location if available, otherwise at route start location
         let busLocation = null;
-        
+
         if (bus.currentLocation) {
           busLocation = bus.currentLocation;
         } else if (bus.start_location_lat && bus.start_location_lng) {
@@ -428,6 +442,12 @@ const MapComponent = ({
           </Marker>
         );
       })}
+
+      {role === 'driver' && userLocation && locationEnabled && (
+        <Marker position={[userLocation.lat, userLocation.lng]}>
+          <Popup>You are here (Driver)</Popup>
+        </Marker>
+      )}
 
       {/* Passenger Markers (Driver View) */}
       {role === 'driver' && passengers.map((passenger) => {

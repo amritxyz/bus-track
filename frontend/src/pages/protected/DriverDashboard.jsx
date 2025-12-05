@@ -117,6 +117,46 @@ const DriverDashboard = () => {
   }, [isLogged, user, navigate, getAuthHeader, selectedTrip, newTripForm.vehicle_id]);
 
   useEffect(() => {
+    if (!locationEnabled) {
+      // If location is disabled, clear the user location
+      setUserLocation(null);
+      return;
+    }
+
+    if (!navigator.geolocation) {
+      console.warn('Geolocation is not supported by this browser.');
+      setHasGeolocationError(true);
+      // Optionally set a default location if needed
+      // setUserLocation({ lat: 27.6884, lng: 83.4490 });
+      return;
+    }
+
+    const handleGeoError = (error) => {
+      console.error('Geolocation error:', error);
+      let message = 'Unable to access your location.';
+      if (error.code === 1) message = 'Location permission was denied.';
+      else if (error.code === 2) message = 'Position unavailable - trying mock location.';
+      else if (error.code === 3) message = 'Position acquisition timed out - trying mock location.';
+      console.warn(message);
+      // Set a mock location only if not permission denied
+      if (error.code !== 1) {
+        setUserLocation({ lat: 27.6884, lng: 83.4490 });
+      }
+    };
+
+    // Get current position first
+    navigator.geolocation.getCurrentPosition(
+      (position) => {
+        const lat = position.coords.latitude;
+        const lng = position.coords.longitude;
+        setUserLocation({ lat, lng });
+      },
+      handleGeoError,
+      { enableHighAccuracy: false, timeout: 10000, maximumAge: 0 }
+    );
+  }, [locationEnabled]); // Only run if locationEnabled changes
+
+  useEffect(() => {
     if (!selectedTrip) {
       setPassengers([]);
       return;
@@ -141,28 +181,29 @@ const DriverDashboard = () => {
   }, [selectedTrip, getAuthHeader]);
 
   useEffect(() => {
-    if (!locationEnabled || !isOnline || !selectedTrip) return;
+    if (!locationEnabled || !isOnline || !selectedTrip) {
+      // If not online, on a trip, or location is disabled, stop watching
+      return;
+    }
+
     if (!navigator.geolocation) {
       console.warn('Geolocation is not supported by this browser.');
       setHasGeolocationError(true);
       return;
     }
+
     const handleGeoError = (error) => {
-      console.error('Geolocation error:', error);
-      let message = 'Unable to access your location.';
-      if (error.code === 1) message = 'Location permission was denied.';
-      else if (error.code === 2) message = 'Position unavailable - trying mock location.';
-      else if (error.code === 3) message = 'Position acquisition timed out - trying mock location.';
-      console.warn(message);
-      if (error.code !== 1 && selectedTrip) {
-        setUserLocation({ lat: 27.6884, lng: 83.4490 });
-      }
+      console.error('Geolocation error during trip:', error);
+      // Don't set mock location here, just log
     };
+
     const updateLocationInDB = async (position) => {
       if (!selectedTrip) return;
       const lat = position.coords.latitude;
       const lng = position.coords.longitude;
+      // Update the local userLocation state as well, so the map sees the latest
       setUserLocation({ lat, lng });
+
       try {
         const response = await fetch(`http://localhost:5000/trips/${selectedTrip.id}/location`, {
           method: 'POST',
@@ -186,18 +227,13 @@ const DriverDashboard = () => {
         console.error('Error updating trip location:', err);
       }
     };
-    navigator.geolocation.getCurrentPosition(
-      updateLocationInDB,
-      handleGeoError,
-      { enableHighAccuracy: false, timeout: 10000, maximumAge: 0 }
-    );
+
     const watchId = navigator.geolocation.watchPosition(
       updateLocationInDB,
-      (error) => {
-        console.warn('Watch position error:', error);
-      },
+      handleGeoError,
       { enableHighAccuracy: false, maximumAge: 30000, timeout: 15000 }
     );
+
     return () => navigator.geolocation.clearWatch(watchId);
   }, [locationEnabled, isOnline, selectedTrip, getAuthHeader]);
 
@@ -853,14 +889,14 @@ const DriverDashboard = () => {
               <div className="h-[calc(100%-40px)] rounded-xl overflow-hidden">
                 <MapComponent
                   role="driver"
-                  buses={trips.map(t => ({ ...t, currentLocation: t.current_location }))} // Use trips with location
+                  buses={trips.map(t => ({ ...t, currentLocation: t.current_location }))}
                   passengers={passengers}
-                  selectedBus={selectedTrip} // Use selectedTrip
-                  onBusSelect={setSelectedTrip} // Update selectedTrip
-                  userLocation={userLocation}
+                  selectedBus={selectedTrip}
+                  onBusSelect={setSelectedTrip}
+                  userLocation={userLocation} // Pass the updated userLocation
                   locationEnabled={locationEnabled}
-                  onLocationSelect={handleMapClickForRoute} // Use the new handler
-                  showRouteSelection={true} // Indicate driver can select route points
+                  onLocationSelect={handleMapClickForRoute}
+                  showRouteSelection={true}
                   proposedRoute={proposedRoute}
                 />
               </div>
