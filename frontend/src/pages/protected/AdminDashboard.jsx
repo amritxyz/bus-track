@@ -9,11 +9,90 @@ const AdminDashboard = () => {
   const { user, isLogged, loading, logout, getAuthHeader } = useAuth();
   const [allRoutes, setAllRoutes] = useState([]);
   const [loadingApprove, setLoadingApprove] = useState(null); // ID of route being approved/rejected
-
   const [pendingVehicles, setPendingVehicles] = useState([]);
-  const [loadingApproveVehicle, setLoadingApproveVehicle] = useState(null); // ID of vehicle being approved
+  const [loadingApproveVehicle, setLoadingApproveVehicle] = useState(null); // ID of vehicle being approved/rejected
+  const [stats, setStats] = useState({
+    totalUsers: 0,
+    activeTrips: 0,
+    activeDrivers: 0,
+    pendingRoutes: 0,
+    pendingVehicles: 0,
+    approvedRoutes: 0
+  });
+  const [statsLoading, setStatsLoading] = useState(true);
 
-  // Fetch pending vehicles
+  // Fetch stats data
+  useEffect(() => {
+    if (!isLogged || !user || user.role !== 'admin') {
+      navigate('/'); // Redirect if not logged in as admin
+      return;
+    }
+
+    const fetchStats = async () => {
+      setStatsLoading(true);
+      try {
+        // Attempt to fetch all users to get counts
+        // This endpoint needs to be added to the backend server.js
+        let totalUsers = 0;
+        let activeDrivers = 0;
+        try {
+          const usersResponse = await fetch('http://localhost:5000/users', { headers: getAuthHeader() }); // Add this endpoint on the backend
+          if (usersResponse.ok) {
+            const usersData = await usersResponse.json();
+            totalUsers = usersData.length;
+            activeDrivers = usersData.filter(u => u.role === 'driver').length;
+          } else {
+            console.warn("Failed to fetch user list for stats, defaulting to 0:", usersResponse.status, usersResponse.statusText);
+            // If the /users endpoint doesn't exist or isn't accessible, default counts to 0
+            // Or handle this differently if you have another way to get counts
+            // For now, we'll just log and continue, counts remain 0
+          }
+        } catch (userErr) {
+          console.warn("Error fetching user list for stats, defaulting to 0:", userErr.message);
+          // If fetching users fails, counts remain 0
+        }
+
+
+        // Fetch all trips to count active ones
+        const tripsResponse = await fetch('http://localhost:5000/trips', { headers: getAuthHeader() });
+        if (!tripsResponse.ok) throw new Error('Failed to fetch trips');
+        const tripsData = await tripsResponse.json();
+        const activeTrips = tripsData.filter(t => t.status === 'on_route' || t.status === 'scheduled').length;
+
+        // Fetch all routes to get counts
+        const routesResponse = await fetch('http://localhost:5000/routes', { headers: getAuthHeader() });
+        if (!routesResponse.ok) throw new Error('Failed to fetch routes');
+        const routesData = await routesResponse.json();
+        const pendingRoutes = routesData.filter(r => r.approved === 0).length;
+        const approvedRoutes = routesData.filter(r => r.approved === 1).length;
+
+        // Fetch pending vehicles (already done separately, but can be counted here too if needed)
+        const vehiclesResponse = await fetch('http://localhost:5000/vehicles?pending=true', { headers: getAuthHeader() });
+        if (!vehiclesResponse.ok) throw new Error('Failed to fetch pending vehicles');
+        const vehiclesData = await vehiclesResponse.json();
+        const pendingVehicles = vehiclesData.length;
+
+        setStats({
+          totalUsers,
+          activeTrips,
+          activeDrivers,
+          pendingRoutes,
+          pendingVehicles,
+          approvedRoutes
+        });
+      } catch (err) {
+        console.error('Error fetching stats:', err);
+        // Optionally set error state here
+        // For now, just log and let the UI show 0s if fetching trips/routes/vehicles fails
+      } finally {
+        setStatsLoading(false);
+      }
+    };
+
+    fetchStats();
+  }, [isLogged, user, navigate, getAuthHeader]);
+
+  // Fetch pending vehicles (already done for stats, but state is needed for actions)
   useEffect(() => {
     if (!isLogged || !user || user.role !== 'admin') {
       navigate('/'); // Redirect if not logged in as admin
@@ -38,7 +117,7 @@ const AdminDashboard = () => {
     fetchPendingVehicles();
   }, [isLogged, user, navigate, getAuthHeader]);
 
-  // Fetch all routes
+  // Fetch all routes (already done for stats, but state is needed for actions)
   useEffect(() => {
     if (!isLogged || !user || user.role !== 'admin') {
       navigate('/'); // Redirect if not logged in as admin
@@ -62,7 +141,7 @@ const AdminDashboard = () => {
     fetchAllRoutes();
   }, [isLogged, user, navigate, getAuthHeader]);
 
-  // Calculate pending and approved routes using useMemo for efficiency
+  // Calculate pending and approved routes using useMemo for efficiency (redundant now, using stats state)
   const { pendingRoutes, approvedRoutes } = useMemo(() => {
     const pending = allRoutes.filter(r => r.approved === 0);
     const approved = allRoutes.filter(r => r.approved === 1);
@@ -88,10 +167,54 @@ const AdminDashboard = () => {
 
       // Update local state
       setPendingVehicles(prev => prev.filter(v => v.id !== vehicleId));
+      // Update stats
+      setStats(prev => ({ ...prev, pendingVehicles: prev.pendingVehicles - 1 }));
 
     } catch (error) {
       console.error('Error approving vehicle:', error);
       alert('Failed to approve vehicle: ' + error.message);
+    } finally {
+      setLoadingApproveVehicle(null);
+    }
+  };
+
+  const handleRejectVehicle = async (vehicleId) => {
+    if (!window.confirm("Are you sure you want to reject this vehicle request?")) {
+      return;
+    }
+    setLoadingApproveVehicle(vehicleId); // Use same loading state for consistency
+    try {
+      // Assuming the backend has a DELETE endpoint for rejected vehicles
+      // If not, you might need a PUT/PATCH endpoint to mark status as 'rejected'
+      // For now, let's assume a DELETE endpoint exists or a PATCH to update status
+      // Example with DELETE: await fetch(`http://localhost:5000/vehicles/${vehicleId}`, { method: 'DELETE', headers: getAuthHeader() });
+      // Example with PATCH to update status:
+      const response = await fetch(`http://localhost:5000/vehicles/${vehicleId}`, {
+        method: 'PUT',
+        headers: {
+          ...getAuthHeader(),
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({ status: 'inactive' }) // Or add a new 'rejected' status in DB if needed
+      });
+
+      if (!response.ok) {
+        const errorData = await response.json();
+        throw new Error(errorData.message || 'Failed to reject vehicle');
+      }
+
+      const result = await response.json();
+      console.log('Vehicle rejected:', result);
+      alert('Vehicle request rejected.');
+
+      // Update local state
+      setPendingVehicles(prev => prev.filter(v => v.id !== vehicleId));
+      // Update stats
+      setStats(prev => ({ ...prev, pendingVehicles: prev.pendingVehicles - 1 }));
+
+    } catch (error) {
+      console.error('Error rejecting vehicle:', error);
+      alert('Failed to reject vehicle: ' + error.message);
     } finally {
       setLoadingApproveVehicle(null);
     }
@@ -113,12 +236,10 @@ const AdminDashboard = () => {
       const result = await response.json();
       console.log('Route approved:', result);
 
-      // Update local state optimistically or refetch
-      // Optimistically update: remove the approved route from the pending list
+      // Update local state optimistically
       setAllRoutes(prev => prev.map(r => r.id === routeId ? { ...r, approved: 1, approved_at: new Date().toISOString(), approved_by_admin_id: user.id } : r));
-
-      // Or, refetch the list (less efficient but ensures consistency)
-      // fetchAllRoutes(); // Assuming fetchAllRoutes is defined in scope or passed down
+      // Update stats
+      setStats(prev => ({ ...prev, pendingRoutes: prev.pendingRoutes - 1, approvedRoutes: prev.approvedRoutes + 1 }));
 
       alert('Route approved successfully!');
 
@@ -131,20 +252,34 @@ const AdminDashboard = () => {
   };
 
   const handleRejectRoute = async (routeId) => {
-    // Implement rejection logic here if needed
-    // For now, just remove from pending list (or maybe mark as rejected in DB)
-    // This is a simplified version, you might want a DELETE endpoint or a PATCH endpoint to update status
-    if (window.confirm("Are you sure you want to reject this route?")) {
-      try {
-        // For this example, we'll just optimistically update the local state to mark it as rejected (-1 or similar)
-        // You'd need a backend endpoint for proper rejection handling
-        // Example: await fetch(`http://localhost:5000/routes/${routeId}/reject`, { method: 'PUT', headers: getAuthHeader() });
-        setAllRoutes(prev => prev.filter(r => r.id !== routeId)); // Remove from all lists
-        alert('Route rejected and removed.');
-      } catch (error) {
-        console.error('Error rejecting route:', error);
-        alert('Failed to reject route: ' + error.message);
+    if (!window.confirm("Are you sure you want to reject this route?")) {
+      return;
+    }
+    try {
+      // Assuming the backend has a DELETE endpoint for rejected routes
+      // If not, implement a PATCH to update status if needed
+      const response = await fetch(`http://localhost:5000/routes/${routeId}`, {
+        method: 'DELETE', // Or PUT/PATCH if backend uses a different method
+        headers: getAuthHeader(),
+      });
+
+      if (!response.ok) {
+        const errorData = await response.json();
+        throw new Error(errorData.message || 'Failed to reject route');
       }
+
+      const result = await response.json();
+      console.log('Route rejected:', result);
+      alert('Route rejected and removed.');
+
+      // Update local state
+      setAllRoutes(prev => prev.filter(r => r.id !== routeId));
+      // Update stats
+      setStats(prev => ({ ...prev, pendingRoutes: prev.pendingRoutes - 1 }));
+
+    } catch (error) {
+      console.error('Error rejecting route:', error);
+      alert('Failed to reject route: ' + error.message);
     }
   };
 
@@ -163,13 +298,13 @@ const AdminDashboard = () => {
         <div className="mb-6">
           <div className="flex flex-col md:flex-row md:items-center justify-between gap-4">
             <div>
-              <h1 className="text-3xl font-bold text-white">Admin Dashboard</h1>
-              <p className="text-slate-400">Manage routes, drivers, and passengers</p>
+              <h1 className="text-2xl md:text-3xl font-bold text-white">Admin Dashboard</h1>
+              <p className="text-slate-400 text-sm md:text-base">Manage routes, drivers, and passengers</p>
             </div>
-            <div className="flex items-center gap-4">
+            <div className="flex flex-wrap items-center gap-3">
               <button
                 onClick={logout}
-                className="text-red-400 hover:text-red-300 transition-colors"
+                className="text-red-400 hover:text-red-300 transition-colors text-sm md:text-base"
               >
                 Sign Out
               </button>
@@ -178,91 +313,110 @@ const AdminDashboard = () => {
         </div>
 
         {/* Stats Cards */}
-        <div className="grid grid-cols-1 md:grid-cols-4 gap-4 mb-6">
-          <div className="bg-slate-800/50 backdrop-blur-sm rounded-2xl p-6 border border-slate-700">
-            <div className="flex items-center justify-between">
-              <div>
-                <p className="text-slate-400">Total Users</p>
-                <h3 className="text-2xl font-bold text-white">100</h3> {/* Fetch from backend */}
+        <div className="grid grid-cols-2 md:grid-cols-4 gap-3 md:gap-4 mb-6">
+          {statsLoading ? (
+            Array.from({ length: 4 }).map((_, i) => (
+              <div key={i} className="bg-slate-800/50 backdrop-blur-sm rounded-xl p-4 md:p-6 border border-slate-700">
+                <div className="flex items-center justify-between">
+                  <div>
+                    <p className="text-xs md:text-sm text-slate-400">&nbsp;</p> {/* Placeholder for label */}
+                    <div className="h-6 w-16 bg-slate-700 rounded mt-1"></div> {/* Skeleton for number */}
+                  </div>
+                  <div className="w-6 h-6 md:w-8 md:h-8 text-cyan-500"></div> {/* Placeholder for icon */}
+                </div>
               </div>
-              <User className="w-8 h-8 text-cyan-500" />
-            </div>
-          </div>
-          <div className="bg-slate-800/50 backdrop-blur-sm rounded-2xl p-6 border border-slate-700">
-            <div className="flex items-center justify-between">
-              <div>
-                <p className="text-slate-400">Active Trips</p>
-                <h3 className="text-2xl font-bold text-white">25</h3> {/* Fetch from backend */}
+            ))
+          ) : (
+            <>
+              <div className="bg-slate-800/50 backdrop-blur-sm rounded-xl p-4 md:p-6 border border-slate-700">
+                <div className="flex items-center justify-between">
+                  <div>
+                    <p className="text-xs md:text-sm text-slate-400">Total Users</p>
+                    <h3 className="text-xl md:text-2xl font-bold text-white">{stats.totalUsers}</h3>
+                  </div>
+                  <User className="w-6 h-6 md:w-8 md:h-8 text-cyan-500" />
+                </div>
               </div>
-              <Navigation className="w-8 h-8 text-blue-500" />
-            </div>
-          </div>
-          <div className="bg-slate-800/50 backdrop-blur-sm rounded-2xl p-6 border border-slate-700">
-            <div className="flex items-center justify-between">
-              <div>
-                <p className="text-slate-400">Pending Routes</p>
-                <h3 className="text-2xl font-bold text-white">{pendingRoutes.length}</h3>
+              <div className="bg-slate-800/50 backdrop-blur-sm rounded-xl p-4 md:p-6 border border-slate-700">
+                <div className="flex items-center justify-between">
+                  <div>
+                    <p className="text-xs md:text-sm text-slate-400">Active Trips</p>
+                    <h3 className="text-xl md:text-2xl font-bold text-white">{stats.activeTrips}</h3>
+                  </div>
+                  <Navigation className="w-6 h-6 md:w-8 md:h-8 text-blue-500" />
+                </div>
               </div>
-              <Clock className="w-8 h-8 text-yellow-500" />
-            </div>
-          </div>
-          <div className="bg-slate-800/50 backdrop-blur-sm rounded-2xl p-6 border border-slate-700">
-            <div className="flex items-center justify-between">
-              <div>
-                <p className="text-slate-400">Active Drivers</p>
-                <h3 className="text-2xl font-bold text-white">15</h3> {/* Fetch from backend */}
+              <div className="bg-slate-800/50 backdrop-blur-sm rounded-xl p-4 md:p-6 border border-slate-700">
+                <div className="flex items-center justify-between">
+                  <div>
+                    <p className="text-xs md:text-sm text-slate-400">Pending Routes</p>
+                    <h3 className="text-xl md:text-2xl font-bold text-white">{stats.pendingRoutes}</h3>
+                  </div>
+                  <Clock className="w-6 h-6 md:w-8 md:h-8 text-yellow-500" />
+                </div>
               </div>
-              <User className="w-8 h-8 text-green-500" />
-            </div>
-          </div>
+              <div className="bg-slate-800/50 backdrop-blur-sm rounded-xl p-4 md:p-6 border border-slate-700">
+                <div className="flex items-center justify-between">
+                  <div>
+                    <p className="text-xs md:text-sm text-slate-400">Active Drivers</p>
+                    <h3 className="text-xl md:text-2xl font-bold text-white">{stats.activeDrivers}</h3>
+                  </div>
+                  <User className="w-6 h-6 md:w-8 md:h-8 text-green-500" />
+                </div>
+              </div>
+            </>
+          )}
         </div>
 
         {/* Main Content */}
-        <div className="grid grid-cols-1 lg:grid-cols-1 gap-6">
+        <div className="grid grid-cols-1 lg:grid-cols-1 gap-4 md:gap-6">
 
-          <div className="bg-slate-800/50 backdrop-blur-sm rounded-2xl p-6 border border-slate-700">
-            <h2 className="text-xl font-semibold mb-4 flex items-center gap-2">
-              <BusFront className="w-5 h-5" />
-              Pending Vehicle Requests ({pendingVehicles.length})
+          <div className="bg-slate-800/50 backdrop-blur-sm rounded-xl p-4 md:p-6 border border-slate-700">
+            <h2 className="text-lg md:text-xl font-semibold mb-4 flex items-center gap-2">
+              <BusFront className="w-4 h-4 md:w-5 md:h-5" />
+              Pending Vehicle Requests ({stats.pendingVehicles})
             </h2>
             {pendingVehicles.length === 0 ? (
-              <p className="text-slate-400 text-center py-4">No pending vehicle requests.</p>
+              <p className="text-slate-400 text-center py-4 text-sm md:text-base">No pending vehicle requests.</p>
             ) : (
-              <div className="space-y-4 max-h-[300px] overflow-y-auto">
+              <div className="space-y-3 max-h-[300px] overflow-y-auto">
                 {pendingVehicles.map((vehicle) => (
-                  <div key={vehicle.id} className="p-4 bg-slate-700/50 rounded-lg">
+                  <div key={vehicle.id} className="p-3 bg-slate-700/50 rounded-lg">
                     <div className="flex items-start justify-between">
                       <div className="flex-1">
-                        <h3 className="font-semibold text-white">{vehicle.plate_number}</h3>
-                        <div className="flex items-center gap-4 mt-2 text-sm text-slate-300">
+                        <h3 className="font-semibold text-white text-sm">{vehicle.plate_number}</h3>
+                        <div className="flex items-center gap-2 mt-1 text-xs text-slate-300">
                           <span>{vehicle.make} {vehicle.model}</span>
                           <span>Year: {vehicle.year}</span>
-                          <span>Capacity: {vehicle.capacity}</span>
+                          <span>Cap: {vehicle.capacity}</span>
                         </div>
                         <div className="mt-1 text-xs text-slate-500">
-                          Requested by: Driver ID {vehicle.proposed_by_driver_id} ({vehicle.proposed_by_driver_name || 'N/A'})
+                          Requested by: {vehicle.proposed_by_driver_name || `Driver ID ${vehicle.proposed_by_driver_id}`}
                         </div>
                       </div>
-                      <div className="flex items-center gap-2">
+                      <div className="flex items-center gap-1">
                         <button
                           onClick={() => handleApproveVehicle(vehicle.id)}
                           disabled={loadingApproveVehicle === vehicle.id}
-                          className={`flex items-center gap-1 px-3 py-1.5 rounded-lg text-sm transition-colors ${loadingApproveVehicle === vehicle.id
+                          className={`flex items-center gap-1 px-2 py-1 rounded-lg text-xs transition-colors ${loadingApproveVehicle === vehicle.id
                             ? 'bg-green-700 cursor-not-allowed'
                             : 'bg-green-600 hover:bg-green-500'
                             }`}
                         >
                           {loadingApproveVehicle === vehicle.id ? 'Approving...' : 'Approve'}
-                          <CheckCircle className="w-4 h-4" />
+                          <CheckCircle className="w-3 h-3" />
                         </button>
-                        {/* Optionally add a Reject button here too */}
-                        {/* <button
-                          onClick={() => handleRejectVehicle(vehicle.id)} // Implement handleRejectVehicle
-                          className="flex items-center gap-1 px-3 py-1.5 rounded-lg bg-red-600 hover:bg-red-500 text-sm transition-colors"
+                        <button
+                          onClick={() => handleRejectVehicle(vehicle.id)}
+                          disabled={loadingApproveVehicle === vehicle.id}
+                          className={`flex items-center gap-1 px-2 py-1 rounded-lg text-xs transition-colors ${loadingApproveVehicle === vehicle.id
+                            ? 'bg-red-700 cursor-not-allowed'
+                            : 'bg-red-600 hover:bg-red-500'
+                            }`}
                         >
-                          Reject
-                          <XCircle className="w-4 h-4" />
-                        </button> */}
+                          {loadingApproveVehicle === vehicle.id ? 'Rejecting...' : 'Reject'}
+                          <XCircle className="w-3 h-3" />
+                        </button>
                       </div>
                     </div>
                   </div>
@@ -271,55 +425,59 @@ const AdminDashboard = () => {
             )}
           </div>
           {/* Pending Routes Section */}
-          <div className="bg-slate-800/50 backdrop-blur-sm rounded-2xl p-6 border border-slate-700">
-            <h2 className="text-xl font-semibold mb-4 flex items-center gap-2">
-              <Clock className="w-5 h-5" />
-              Pending Route Proposals ({pendingRoutes.length})
+          <div className="bg-slate-800/50 backdrop-blur-sm rounded-xl p-4 md:p-6 border border-slate-700">
+            <h2 className="text-lg md:text-xl font-semibold mb-4 flex items-center gap-2">
+              <Clock className="w-4 h-4 md:w-5 md:h-5" />
+              Pending Route Proposals ({stats.pendingRoutes})
             </h2>
             {pendingRoutes.length === 0 ? (
-              <p className="text-slate-400 text-center py-4">No pending route proposals.</p>
+              <p className="text-slate-400 text-center py-4 text-sm md:text-base">No pending route proposals.</p>
             ) : (
-              <div className="space-y-4 max-h-[300px] overflow-y-auto">
+              <div className="space-y-3 max-h-[300px] overflow-y-auto">
                 {pendingRoutes.map((route) => (
-                  <div key={route.id} className="p-4 bg-slate-700/50 rounded-lg">
+                  <div key={route.id} className="p-3 bg-slate-700/50 rounded-lg">
                     <div className="flex items-start justify-between">
                       <div className="flex-1">
-                        <h3 className="font-semibold text-white">{route.route_name}</h3>
-                        <div className="flex items-center gap-4 mt-2 text-sm text-slate-300">
+                        <h3 className="font-semibold text-white text-sm">{route.route_name}</h3>
+                        <div className="flex items-center gap-2 mt-1 text-xs text-slate-300">
                           <div className="flex items-center gap-1">
-                            <MapPin className="w-4 h-4" />
+                            <MapPin className="w-3 h-3" />
                             <span>{route.start_location_name}</span>
                           </div>
                           <div className="flex items-center gap-1">
-                            <MapPin className="w-4 h-4" />
+                            <MapPin className="w-3 h-3" />
                             <span>{route.end_location_name}</span>
                           </div>
                         </div>
-                        <div className="mt-2 text-xs text-slate-400">
-                          Distance: {route.distance} km, Time: {route.estimated_time} mins
+                        <div className="mt-1 text-xs text-slate-400">
+                          Dist: {route.distance} km, Time: {route.estimated_time} mins
                         </div>
                         <div className="mt-1 text-xs text-slate-500">
-                          Proposed by: Driver ID {route.proposed_by_driver_id} {/* Assuming backend adds this */}
+                          Proposed by: {route.proposed_by_driver_name || `Driver ID ${route.proposed_by_driver_id}`}
                         </div>
                       </div>
-                      <div className="flex items-center gap-2">
+                      <div className="flex items-center gap-1">
                         <button
                           onClick={() => handleApproveRoute(route.id)}
                           disabled={loadingApprove === route.id}
-                          className={`flex items-center gap-1 px-3 py-1.5 rounded-lg text-sm transition-colors ${loadingApprove === route.id
+                          className={`flex items-center gap-1 px-2 py-1 rounded-lg text-xs transition-colors ${loadingApprove === route.id
                             ? 'bg-green-700 cursor-not-allowed'
                             : 'bg-green-600 hover:bg-green-500'
                             }`}
                         >
                           {loadingApprove === route.id ? 'Approving...' : 'Approve'}
-                          <CheckCircle className="w-4 h-4" />
+                          <CheckCircle className="w-3 h-3" />
                         </button>
                         <button
                           onClick={() => handleRejectRoute(route.id)}
-                          className="flex items-center gap-1 px-3 py-1.5 rounded-lg bg-red-600 hover:bg-red-500 text-sm transition-colors"
+                          disabled={loadingApprove === route.id}
+                          className={`flex items-center gap-1 px-2 py-1 rounded-lg text-xs transition-colors ${loadingApprove === route.id
+                            ? 'bg-red-700 cursor-not-allowed'
+                            : 'bg-red-600 hover:bg-red-500'
+                            }`}
                         >
-                          Reject
-                          <XCircle className="w-4 h-4" />
+                          {loadingApprove === route.id ? 'Rejecting...' : 'Reject'}
+                          <XCircle className="w-3 h-3" />
                         </button>
                       </div>
                     </div>
@@ -330,38 +488,38 @@ const AdminDashboard = () => {
           </div>
 
           {/* Approved Routes Section */}
-          <div className="bg-slate-800/50 backdrop-blur-sm rounded-2xl p-6 border border-slate-700">
-            <h2 className="text-xl font-semibold mb-4 flex items-center gap-2">
-              <CheckCircle className="w-5 h-5" />
-              Approved Routes ({approvedRoutes.length})
+          <div className="bg-slate-800/50 backdrop-blur-sm rounded-xl p-4 md:p-6 border border-slate-700">
+            <h2 className="text-lg md:text-xl font-semibold mb-4 flex items-center gap-2">
+              <CheckCircle className="w-4 h-4 md:w-5 md:h-5" />
+              Approved Routes ({stats.approvedRoutes})
             </h2>
             {approvedRoutes.length === 0 ? (
-              <p className="text-slate-400 text-center py-4">No approved routes.</p>
+              <p className="text-slate-400 text-center py-4 text-sm md:text-base">No approved routes.</p>
             ) : (
-              <div className="space-y-4 max-h-[300px] overflow-y-auto">
+              <div className="space-y-3 max-h-[300px] overflow-y-auto">
                 {approvedRoutes.map((route) => (
-                  <div key={route.id} className="p-4 bg-slate-700/50 rounded-lg">
+                  <div key={route.id} className="p-3 bg-slate-700/50 rounded-lg">
                     <div className="flex items-start justify-between">
                       <div className="flex-1">
-                        <h3 className="font-semibold text-white">{route.route_name}</h3>
-                        <div className="flex items-center gap-4 mt-2 text-sm text-slate-300">
+                        <h3 className="font-semibold text-white text-sm">{route.route_name}</h3>
+                        <div className="flex items-center gap-2 mt-1 text-xs text-slate-300">
                           <div className="flex items-center gap-1">
-                            <MapPin className="w-4 h-4" />
+                            <MapPin className="w-3 h-3" />
                             <span>{route.start_location_name}</span>
                           </div>
                           <div className="flex items-center gap-1">
-                            <MapPin className="w-4 h-4" />
+                            <MapPin className="w-3 h-3" />
                             <span>{route.end_location_name}</span>
                           </div>
                         </div>
-                        <div className="mt-2 text-xs text-slate-400">
-                          Distance: {route.distance} km, Time: {route.estimated_time} mins
+                        <div className="mt-1 text-xs text-slate-400">
+                          Dist: {route.distance} km, Time: {route.estimated_time} mins
                         </div>
                         <div className="mt-1 text-xs text-slate-500">
-                          Approved by: Admin ID {route.approved_by_admin_id} on {new Date(route.approved_at).toLocaleString()}
+                          Approved by: Admin ID {route.approved_by_admin_id} on {new Date(route.approved_at).toLocaleDateString()}
                         </div>
                       </div>
-                      <div className="flex items-center gap-2">
+                      <div className="flex items-center gap-1">
                         <span className="px-2 py-1 rounded-full text-xs font-medium bg-green-500/20 text-green-400">
                           Approved
                         </span>

@@ -4,7 +4,7 @@ import React, { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useAuth } from '../../contexts/AuthContext';
 import MapComponent from '../../components/MapComponent';
-import { Navigation, MapPin, Ticket, Users, Clock, Smartphone, Bus, RotateCcw } from 'lucide-react';
+import { Navigation, MapPin, Ticket, Users, Clock, Smartphone, Bus, RotateCcw, ChevronDown, ChevronUp, Menu, X } from 'lucide-react';
 
 const PassengerDashboard = () => {
   const navigate = useNavigate();
@@ -23,6 +23,41 @@ const PassengerDashboard = () => {
   const [proximityLevel, setProximityLevel] = useState(null); // For highlighting nearby buses
   const [locationSelectionStep, setLocationSelectionStep] = useState(0); // 0: none, 1: pickup selected, 2: dropoff selected
   const [showLocationSelection, setShowLocationSelection] = useState(false); // Toggle for location selection UI
+  const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
+
+  // State to manage expanded sections
+  // Only 'availableBuses', 'bookBus', 'yourBookings' are controlled for mutual exclusivity
+  // 'tripDetails' is not applicable for passenger dashboard in this structure
+  const [expandedSections, setExpandedSections] = useState({
+    availableBuses: true, // Default open
+    bookBus: false,
+    yourBookings: false
+  });
+
+  // Toggle section visibility
+  // This function ensures only one of the main sections is open
+  const toggleSection = (section) => {
+    setExpandedSections(prev => {
+      // Define the sections that should be mutually exclusive
+      const mainSections = ['availableBuses', 'bookBus', 'yourBookings'];
+
+      // If the clicked section is one of the main ones, close the others
+      if (mainSections.includes(section)) {
+        const newExpanded = { ...prev };
+        // Close all main sections
+        mainSections.forEach(s => newExpanded[s] = false);
+        // Toggle the clicked section
+        newExpanded[section] = !prev[section];
+        return newExpanded;
+      } else {
+        // If it's not a main section, just toggle it normally (though there are no other toggleable sections in this case)
+        return {
+          ...prev,
+          [section]: !prev[section]
+        };
+      }
+    });
+  };
 
   // Fetch available buses (trips) and routes
   useEffect(() => {
@@ -101,7 +136,7 @@ const PassengerDashboard = () => {
       else if (error.code === 2) message = 'Position unavailable - trying mock location.';
       else if (error.code === 3) message = 'Position acquisition timed out - trying mock location.';
       console.warn(message);
-      
+
       // Set a mock/default location for development if geolocation fails
       // Users in real deployment would need GPS hardware or mock location
       if (error.code !== 1) { // Only use mock if not permission denied
@@ -161,6 +196,8 @@ const PassengerDashboard = () => {
     // Optionally scroll booking panel into view
     const bookingPanel = document.querySelector('[data-booking-panel]');
     if (bookingPanel) bookingPanel.scrollIntoView({ behavior: 'smooth', block: 'center' });
+    // Open the booking section
+    setExpandedSections(prev => ({ ...prev, bookBus: true, availableBuses: false, yourBookings: false }));
   };
 
   // Handle map click for location selection during booking
@@ -276,6 +313,8 @@ const PassengerDashboard = () => {
       // Reset selection after booking
       setSelectedBus(null);
       handleResetLocationSelection();
+      // Optionally close the booking section after successful booking
+      setExpandedSections(prev => ({ ...prev, bookBus: false }));
 
     } catch (error) {
       console.error('Booking error:', error);
@@ -294,226 +333,273 @@ const PassengerDashboard = () => {
   }
 
   return (
-    <div className="min-h-screen bg-gradient-to-br from-slate-950 via-blue-950 to-slate-950 text-white p-4">
-      <div className="max-w-7xl mx-auto">
+    <div className="min-h-screen bg-gradient-to-br from-slate-950 via-blue-950 to-slate-950 text-white">
+      {/* Mobile Menu Button */}
+      <button
+        onClick={() => setMobileMenuOpen(!mobileMenuOpen)}
+        className="lg:hidden fixed top-4 right-4 z-50 p-2 bg-slate-800/80 backdrop-blur-sm rounded-lg border border-slate-700"
+      >
+        {mobileMenuOpen ? <X className="w-6 h-6" /> : <Menu className="w-6 h-6" />}
+      </button>
+      <div className="max-w-7xl mx-auto p-4">
         {/* Header */}
-        <div className="mb-8">
+        <div className="mb-6">
           <div className="flex flex-col md:flex-row md:items-center justify-between gap-4">
             <div>
-              <h1 className="text-3xl font-bold text-white">Passenger Bus Tracker</h1>
-              <p className="text-slate-400">Book buses in real-time and track their routes</p>
+              <h1 className="text-2xl md:text-3xl font-bold text-white">Passenger Bus Tracker</h1>
+              <p className="text-slate-400 text-sm md:text-base">Book buses in real-time and track their routes</p>
             </div>
-            <div className="flex flex-col items-stretch md:items-end gap-3">
-              <div className="flex items-center gap-4">
-                <div className="flex items-center gap-2">
-                  <span className={`inline-flex items-center px-3 py-1 rounded-full text-sm font-medium ${locationEnabled ? 'bg-cyan-500/20 text-cyan-400' : 'bg-slate-700 text-slate-400'}`}>
-                    <MapPin className="w-4 h-4 mr-1" />
-                    {locationEnabled ? 'Sharing' : 'Hidden'}
-                  </span>
-                  <button
-                    onClick={() => setLocationEnabled(!locationEnabled)}
-                    className={`relative inline-flex h-6 w-11 items-center rounded-full transition-colors ${locationEnabled ? 'bg-cyan-500' : 'bg-slate-600'}`}
-                  >
-                    <span
-                      className={`inline-block h-4 w-4 transform rounded-full bg-white transition-transform ${locationEnabled ? 'translate-x-6' : 'translate-x-1'}`}
-                    />
-                  </button>
-                </div>
+            <div className="flex flex-wrap items-center gap-3">
+              <div className="flex items-center gap-2">
+                <span className={`inline-flex items-center px-3 py-1 rounded-full text-xs md:text-sm font-medium ${locationEnabled ? 'bg-cyan-500/20 text-cyan-400' : 'bg-slate-700 text-slate-400'}`}>
+                  <MapPin className="w-3 h-3 md:w-4 md:h-4 mr-1" />
+                  {locationEnabled ? 'Sharing' : 'Hidden'}
+                </span>
                 <button
-                  onClick={logout}
-                  className="text-red-400 hover:text-red-300 transition-colors"
+                  onClick={() => setLocationEnabled(!locationEnabled)}
+                  className={`relative inline-flex h-6 w-11 items-center rounded-full transition-colors ${locationEnabled ? 'bg-cyan-500' : 'bg-slate-600'}`}
                 >
-                  Sign Out
+                  <span
+                    className={`inline-block h-4 w-4 transform rounded-full bg-white transition-transform ${locationEnabled ? 'translate-x-6' : 'translate-x-1'}`}
+                  />
                 </button>
               </div>
+              <button
+                onClick={logout}
+                className="text-red-400 hover:text-red-300 transition-colors text-sm md:text-base"
+              >
+                Sign Out
+              </button>
+            </div>
+          </div>
+        </div>
+
+        {/* Stats Cards */}
+        <div className="grid grid-cols-2 md:grid-cols-4 gap-3 md:gap-4 mb-6">
+          <div className="bg-slate-800/50 backdrop-blur-sm rounded-xl p-4 md:p-6 border border-slate-700">
+            <div className="flex items-center justify-between">
+              <div>
+                <p className="text-xs md:text-sm text-slate-400">Available Buses</p>
+                <h3 className="text-xl md:text-2xl font-bold text-white">{buses.length}</h3>
+              </div>
+              <Bus className="w-6 h-6 md:w-8 md:h-8 text-cyan-500" />
+            </div>
+          </div>
+          <div className="bg-slate-800/50 backdrop-blur-sm rounded-xl p-4 md:p-6 border border-slate-700">
+            <div className="flex items-center justify-between">
+              <div>
+                <p className="text-xs md:text-sm text-slate-400">Active Bookings</p>
+                <h3 className="text-xl md:text-2xl font-bold text-white">{bookings.filter(b => b.status !== 'cancelled').length}</h3>
+              </div>
+              <Ticket className="w-6 h-6 md:w-8 md:h-8 text-blue-500" />
+            </div>
+          </div>
+          <div className="bg-slate-800/50 backdrop-blur-sm rounded-xl p-4 md:p-6 border border-slate-700">
+            <div className="flex items-center justify-between">
+              <div>
+                <p className="text-xs md:text-sm text-slate-400">Total Trips</p>
+                <h3 className="text-xl md:text-2xl font-bold text-white">{trips.length}</h3>
+              </div>
+              <Clock className="w-6 h-6 md:w-8 md:h-8 text-green-500" />
+            </div>
+          </div>
+          <div className="bg-slate-800/50 backdrop-blur-sm rounded-xl p-4 md:p-6 border border-slate-700">
+            <div className="flex items-center justify-between">
+              <div>
+                <p className="text-xs md:text-sm text-slate-400">Routes</p>
+                <h3 className="text-xl md:text-2xl font-bold text-white">{allRoutes.length}</h3>
+              </div>
+              <Navigation className="w-6 h-6 md:w-8 md:h-8 text-purple-500" />
             </div>
           </div>
         </div>
 
         {/* Main Content */}
-        <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
-          {/* Left Panel - Booking Controls */}
-          <div className="space-y-6">
-            {/* Available Trips List */}
-            <div data-booking-panel className="bg-slate-800/50 backdrop-blur-sm rounded-2xl p-6 border border-slate-700">
-              <h2 className="text-xl font-semibold mb-4 flex items-center gap-2">
-                <Bus className="w-5 h-5" />
-                Available Buses ({buses.length})
-              </h2>
-              {buses.length === 0 ? (
-                <p className="text-slate-400 text-sm">No buses available at the moment.</p>
-              ) : (
-                <div className="space-y-2 max-h-96 overflow-y-auto">
-                  {buses.map((bus) => (
-                    <div
-                      key={bus.id}
-                      onClick={() => handleBusSelect(bus)}
-                      className={`p-3 rounded-lg cursor-pointer transition-all ${
-                        selectedBus?.id === bus.id
-                          ? 'bg-cyan-500/30 border border-cyan-500'
-                          : 'bg-slate-700/50 border border-slate-600 hover:bg-slate-700'
-                      }`}
-                    >
-                      <div className="flex items-center justify-between">
-                        <div className="flex-1">
-                          <p className="font-medium text-white text-sm">{bus.route_name}</p>
-                          <p className="text-xs text-slate-400">{bus.plate_number}</p>
-                          <div className="flex items-center justify-between mt-2">
-                            <p className="text-xs text-slate-300">
-                              Departs: <span className="text-cyan-400">{new Date(bus.departure_time).toLocaleTimeString()}</span>
-                            </p>
-                            <p className="text-xs text-slate-300">
-                              Seats: <span className="text-green-400 font-semibold">{bus.available_seats}</span>
-                            </p>
-                          </div>
-                          <p className="text-xs text-slate-500 mt-1">₹{bus.fare}/person</p>
-                        </div>
-                      </div>
-                    </div>
-                  ))}
-                </div>
-              )}
-            </div>
-
-            {/* Booking Panel */}
-            <div className="bg-slate-800/50 backdrop-blur-sm rounded-2xl p-6 border border-slate-700">
-              <h2 className="text-xl font-semibold mb-4">Book Selected Bus</h2>
-              {selectedBus ? (
-                <div className="space-y-4">
-                  <div className="p-3 bg-cyan-500/10 border border-cyan-500/30 rounded">
-                    <p className="font-medium text-white text-sm">{selectedBus.route_name}</p>
-                    <p className="text-xs text-slate-300 mt-1">{selectedBus.start_location_name} → {selectedBus.end_location_name}</p>
-                    <p className="text-xs text-slate-400 mt-2">Available Seats: <span className="text-green-400">{selectedBus.available_seats}</span></p>
-                    <p className="text-xs text-slate-400">Fare: <span className="text-yellow-400">₹{selectedBus.fare}</span></p>
-                  </div>
-
-                  {/* Location Selection UI */}
-                  {!showLocationSelection ? (
-                    <button
-                      onClick={handleStartLocationSelection}
-                      className="w-full py-2 px-4 rounded-lg bg-gradient-to-r from-cyan-500 to-blue-600 hover:from-cyan-400 hover:to-blue-500 transition-colors text-white"
-                    >
-                      Select Pickup & Dropoff
-                    </button>
+        <div className="grid grid-cols-1 lg:grid-cols-3 gap-4 md:gap-6">
+          {/* Left Panel - Collapsible Sections */}
+          <div className={`lg:col-span-1 ${mobileMenuOpen ? 'block' : 'hidden lg:block'} space-y-4 md:space-y-6`}>
+            {/* Available Buses Section */}
+            <div className="bg-slate-800/50 backdrop-blur-sm rounded-xl border border-slate-700 overflow-hidden">
+              <button
+                onClick={() => toggleSection('availableBuses')}
+                className="w-full p-4 md:p-6 flex items-center justify-between hover:bg-slate-700/30 transition-colors"
+              >
+                <h3 className="text-base md:text-lg font-semibold flex items-center gap-2">
+                  <Bus className="w-4 h-4 md:w-5 md:h-5" />
+                  Available Buses ({buses.length})
+                </h3>
+                {expandedSections.availableBuses ? (
+                  <ChevronUp className="w-4 h-4 md:w-5 md:h-5" />
+                ) : (
+                  <ChevronDown className="w-4 h-4 md:w-5 md:h-5" />
+                )}
+              </button>
+              {expandedSections.availableBuses && (
+                <div className="p-4 md:p-6 pt-0">
+                  {buses.length === 0 ? (
+                    <p className="text-slate-400 text-sm">No buses available at the moment.</p>
                   ) : (
-                    <div className="space-y-3">
-                      <p className="text-sm text-slate-400">Click on the map to select Pickup and Dropoff locations (1st click = Pickup, 2nd click = Dropoff, 3rd click = New Pickup).</p>
-                      <div className="flex gap-2">
-                        <div className={`flex-1 p-2 rounded ${locationSelectionStep >= 1 ? 'bg-slate-700' : 'bg-slate-900/50'
-                          }`}>
-                          <p className="text-xs text-slate-300">Pickup: {pickupLocation ? pickupLocation.name : 'Not set'}</p>
-                        </div>
-                        <div className={`flex-1 p-2 rounded ${locationSelectionStep === 2 ? 'bg-slate-700' : 'bg-slate-900/50'
-                          }`}>
-                          <p className="text-xs text-slate-300">Dropoff: {dropoffLocation ? dropoffLocation.name : 'Not set'}</p>
-                        </div>
-                      </div>
-                      <div className="flex gap-2">
-                        <button
-                          onClick={handleResetLocationSelection}
-                          className="flex-1 flex items-center justify-center gap-1 py-2 px-4 rounded-lg bg-slate-700 hover:bg-slate-600 transition-colors text-slate-300"
-                        >
-                          <RotateCcw className="w-4 h-4" />
-                          Reset
-                        </button>
-                        <button
-                          onClick={handleCompleteBooking}
-                          disabled={!pickupLocation || !dropoffLocation || bookingLoading}
-                          className={`flex-1 py-2 px-4 rounded-lg transition-colors ${!pickupLocation || !dropoffLocation || bookingLoading
-                            ? 'bg-slate-700 cursor-not-allowed'
-                            : 'bg-gradient-to-r from-cyan-500 to-blue-600 hover:from-cyan-400 hover:to-blue-500'
+                    <div className="space-y-2 max-h-60 overflow-y-auto">
+                      {buses.map((bus) => (
+                        <div
+                          key={bus.id}
+                          onClick={() => handleBusSelect(bus)}
+                          className={`p-3 rounded-lg cursor-pointer transition-all ${selectedBus?.id === bus.id
+                              ? 'bg-cyan-500/30 border border-cyan-500'
+                              : 'bg-slate-700/50 border border-slate-600 hover:bg-slate-700'
                             }`}
                         >
-                          {bookingLoading ? 'Booking...' : 'Confirm Booking'}
-                        </button>
-                      </div>
+                          <div className="flex items-center justify-between">
+                            <div className="flex-1">
+                              <p className="font-medium text-white text-sm">{bus.route_name}</p>
+                              <p className="text-xs text-slate-400">{bus.plate_number}</p>
+                              <div className="flex items-center justify-between mt-2">
+                                <p className="text-xs text-slate-300">
+                                  Departs: <span className="text-cyan-400">{new Date(bus.departure_time).toLocaleTimeString()}</span>
+                                </p>
+                                <p className="text-xs text-slate-300">
+                                  Seats: <span className="text-green-400 font-semibold">{bus.available_seats}</span>
+                                </p>
+                              </div>
+                              <p className="text-xs text-slate-500 mt-1">₹{bus.fare}/person</p>
+                            </div>
+                          </div>
+                        </div>
+                      ))}
                     </div>
                   )}
                 </div>
-              ) : (
-                <p className="text-slate-400 text-sm">Select a bus from the list above to book.</p>
               )}
             </div>
 
-            {/* Available Trips List */}
-            {buses.length > 0 && (
-              <div className="bg-slate-800/50 backdrop-blur-sm rounded-2xl p-6 border border-slate-700">
-                <h3 className="text-lg font-semibold mb-4 flex items-center gap-2">
-                  <Clock className="w-5 h-5" />
-                  Available Trips ({buses.length})
+            {/* Book Bus Section */}
+            <div className="bg-slate-800/50 backdrop-blur-sm rounded-xl border border-slate-700 overflow-hidden">
+              <button
+                onClick={() => toggleSection('bookBus')}
+                className="w-full p-4 md:p-6 flex items-center justify-between hover:bg-slate-700/30 transition-colors"
+              >
+                <h3 className="text-base md:text-lg font-semibold flex items-center gap-2">
+                  <Ticket className="w-4 h-4 md:w-5 md:h-5" />
+                  Book Selected Bus
                 </h3>
-                <div className="space-y-2 max-h-60 overflow-y-auto">
-                  {buses.map((bus) => (
-                    <div
-                      key={bus.id}
-                      onClick={() => handleBusSelect(bus)}
-                      className={`p-3 rounded-lg cursor-pointer transition-all ${
-                        selectedBus?.id === bus.id
-                          ? 'bg-cyan-500/20 border border-cyan-500'
-                          : 'bg-slate-700/50 hover:bg-slate-700 border border-slate-600'
-                      }`}
-                    >
-                      <div className="flex items-center justify-between">
-                        <div className="flex-1">
-                          <p className="font-medium text-white text-sm">{bus.plate_number} - {bus.route_name}</p>
-                          <p className="text-xs text-slate-400">Depart: {new Date(bus.departure_time).toLocaleTimeString()}</p>
-                          <p className="text-xs text-slate-400">Arrive: {new Date(bus.arrival_time).toLocaleTimeString()}</p>
-                        </div>
-                        <div className="text-right">
-                          <span className="text-xs font-semibold text-green-400">{bus.available_seats} seats</span>
-                          <p className="text-xs text-yellow-400">₹{bus.fare}</p>
-                        </div>
+                {expandedSections.bookBus ? (
+                  <ChevronUp className="w-4 h-4 md:w-5 md:h-5" />
+                ) : (
+                  <ChevronDown className="w-4 h-4 md:w-5 md:h-5" />
+                )}
+              </button>
+              {expandedSections.bookBus && (
+                <div className="p-4 md:p-6 pt-0 space-y-4">
+                  {selectedBus ? (
+                    <div className="space-y-4">
+                      <div className="p-3 bg-cyan-500/10 border border-cyan-500/30 rounded">
+                        <p className="font-medium text-white text-sm">{selectedBus.route_name}</p>
+                        <p className="text-xs text-slate-300 mt-1">{selectedBus.start_location_name} → {selectedBus.end_location_name}</p>
+                        <p className="text-xs text-slate-400 mt-2">Available Seats: <span className="text-green-400">{selectedBus.available_seats}</span></p>
+                        <p className="text-xs text-slate-400">Fare: <span className="text-yellow-400">₹{selectedBus.fare}</span></p>
                       </div>
-                    </div>
-                  ))}
-                </div>
-              </div>
-            )}
 
-            {buses.length === 0 && (
-              <div className="bg-slate-800/50 backdrop-blur-sm rounded-2xl p-6 border border-slate-700">
-                <p className="text-slate-400 text-center text-sm">No available trips at the moment</p>
-              </div>
-            )}
-              <div className="bg-slate-800/50 backdrop-blur-sm rounded-2xl p-6 border border-slate-700">
-                <h3 className="text-lg font-semibold mb-4 flex items-center gap-2">
-                  <Ticket className="w-5 h-5" />
-                  Your Bookings ({bookings.length})
-                </h3>
-                <div className="space-y-3 max-h-60 overflow-y-auto">
-                  {bookings.map((booking) => (
-                    <div key={booking.id} className="p-3 bg-slate-700/50 rounded-lg">
-                      <div className="flex items-center justify-between">
-                        <div>
-                          <p className="font-medium text-white">Booking #{booking.id}</p>
-                          <p className="text-sm text-slate-400">Trip: {booking.route_name || 'N/A'}</p>
-                          <p className="text-xs text-slate-500">Seat: {booking.seat_number}</p>
+                      {/* Location Selection UI */}
+                      {!showLocationSelection ? (
+                        <button
+                          onClick={handleStartLocationSelection}
+                          className="w-full py-2 px-4 rounded-lg bg-gradient-to-r from-cyan-500 to-blue-600 hover:from-cyan-400 hover:to-blue-500 transition-colors text-white"
+                        >
+                          Select Pickup & Dropoff
+                        </button>
+                      ) : (
+                        <div className="space-y-3">
+                          <p className="text-xs md:text-sm text-slate-400">Click on the map to select Pickup and Dropoff locations (1st click = Pickup, 2nd click = Dropoff, 3rd click = New Pickup).</p>
+                          <div className="flex gap-2">
+                            <div className={`flex-1 p-2 rounded ${locationSelectionStep >= 1 ? 'bg-slate-700' : 'bg-slate-900/50'
+                              }`}>
+                              <p className="text-xs text-slate-300">Pickup: {pickupLocation ? pickupLocation.name : 'Not set'}</p>
+                            </div>
+                            <div className={`flex-1 p-2 rounded ${locationSelectionStep === 2 ? 'bg-slate-700' : 'bg-slate-900/50'
+                              }`}>
+                              <p className="text-xs text-slate-300">Dropoff: {dropoffLocation ? dropoffLocation.name : 'Not set'}</p>
+                            </div>
+                          </div>
+                          <div className="flex gap-2">
+                            <button
+                              onClick={handleResetLocationSelection}
+                              className="flex-1 flex items-center justify-center gap-1 py-2 px-4 rounded-lg bg-slate-700 hover:bg-slate-600 transition-colors text-slate-300"
+                            >
+                              <RotateCcw className="w-3 h-3 md:w-4 md:h-4" />
+                              Reset
+                            </button>
+                            <button
+                              onClick={handleCompleteBooking}
+                              disabled={!pickupLocation || !dropoffLocation || bookingLoading}
+                              className={`flex-1 py-2 px-4 rounded-lg transition-colors text-sm ${!pickupLocation || !dropoffLocation || bookingLoading
+                                ? 'bg-slate-700 cursor-not-allowed'
+                                : 'bg-gradient-to-r from-cyan-500 to-blue-600 hover:from-cyan-400 hover:to-blue-500'
+                                }`}
+                            >
+                              {bookingLoading ? 'Booking...' : 'Confirm Booking'}
+                            </button>
+                          </div>
                         </div>
-                        <span className="px-2 py-1 rounded-full text-xs font-medium bg-green-500/20 text-green-400">
-                          Confirmed
-                        </span>
-                      </div>
+                      )}
                     </div>
-                  ))}
+                  ) : (
+                    <p className="text-slate-400 text-sm">Select a bus from the list above to book.</p>
+                  )}
                 </div>
-              </div>
+              )}
             </div>
+
+            {/* Your Bookings Section */}
+            <div className="bg-slate-800/50 backdrop-blur-sm rounded-xl border border-slate-700 overflow-hidden">
+              <button
+                onClick={() => toggleSection('yourBookings')}
+                className="w-full p-4 md:p-6 flex items-center justify-between hover:bg-slate-700/30 transition-colors"
+              >
+                <h3 className="text-base md:text-lg font-semibold flex items-center gap-2">
+                  <Ticket className="w-4 h-4 md:w-5 md:h-5" />
+                  Your Bookings ({bookings.filter(b => b.status !== 'cancelled').length})
+                </h3>
+                {expandedSections.yourBookings ? (
+                  <ChevronUp className="w-4 h-4 md:w-5 md:h-5" />
+                ) : (
+                  <ChevronDown className="w-4 h-4 md:w-5 md:h-5" />
+                )}
+              </button>
+              {expandedSections.yourBookings && (
+                <div className="p-4 md:p-6 pt-0">
+                  <div className="space-y-3 max-h-60 overflow-y-auto">
+                    {bookings.filter(b => b.status !== 'cancelled').length === 0 ? (
+                      <p className="text-slate-400 text-sm">No active bookings.</p>
+                    ) : (
+                      bookings.filter(b => b.status !== 'cancelled').map((booking) => (
+                        <div key={booking.id} className="p-3 bg-slate-700/50 rounded-lg">
+                          <div className="flex items-center justify-between">
+                            <div>
+                              <p className="font-medium text-white text-sm">Trip: {booking.route_name || 'N/A'}</p>
+                              <p className="text-xs text-slate-400">Seat: {booking.seat_number}</p>
+                              <p className="text-xs text-slate-500">Booking ID: #{booking.id}</p>
+                            </div>
+                            <span className="px-2 py-1 rounded-full text-xs font-medium bg-green-500/20 text-green-400">
+                              Confirmed
+                            </span>
+                          </div>
+                        </div>
+                      ))
+                    )}
+                  </div>
+                </div>
+              )}
+            </div>
+          </div>
 
           {/* Map Section */}
           <div className="lg:col-span-2">
             <div className="bg-slate-800/50 backdrop-blur-sm rounded-2xl p-6 border border-slate-700 h-[600px]">
-              <div className="flex items-center justify-between mb-4">
-                <h2 className="text-xl font-semibold flex items-center gap-2">
-                  <Navigation className="w-5 h-5" />
-                  Available Buses
-                </h2>
-                <div className="flex items-center gap-2">
-                  <span className="text-sm text-slate-400">
-                    {buses.filter(b => b.current_location).length} Active
-                  </span>
-                </div>
-              </div>
-              <div className="h-[calc(100%-50px)] rounded-xl overflow-hidden">
+              <h2 className="text-xl font-semibold mb-4 flex items-center gap-2">
+                <Navigation className="w-5 h-5" />
+                Available Buses
+              </h2>
+              <div className="h-[calc(100%-40px)] rounded-xl overflow-hidden">
                 <MapComponent
                   role="passenger"
                   buses={memoBuses}
@@ -533,41 +619,36 @@ const PassengerDashboard = () => {
                 />
               </div>
             </div>
-            {/* Instructions */}
-            <div className="mt-4 grid grid-cols-1 md:grid-cols-3 gap-4">
-              <div className="bg-slate-800/50 backdrop-blur-sm rounded-2xl p-4 border border-slate-700">
-                <div className="flex items-center gap-3">
-                  <div className="w-10 h-10 rounded-full bg-cyan-500/20 flex items-center justify-center">
-                    <Navigation className="w-5 h-5 text-cyan-400" />
-                  </div>
-                  <div>
-                    <h4 className="font-semibold text-white">View Routes</h4>
-                    <p className="text-sm text-slate-400">Click bus to see its route</p>
-                  </div>
-                </div>
-              </div>
-              <div className="bg-slate-800/50 backdrop-blur-sm rounded-2xl p-4 border border-slate-700">
-                <div className="flex items-center gap-3">
-                  <div className="w-10 h-10 rounded-full bg-blue-500/20 flex items-center justify-center">
-                    <Smartphone className="w-5 h-5 text-blue-400" />
-                  </div>
-                  <div>
-                    <h4 className="font-semibold text-white">Click Bus Icons</h4>
-                    <p className="text-sm text-slate-400">Select bus to book</p>
-                  </div>
-                </div>
-              </div>
-              <div className="bg-slate-800/50 backdrop-blur-sm rounded-2xl p-4 border border-slate-700">
-                <div className="flex items-center gap-3">
-                  <div className="w-10 h-10 rounded-full bg-green-500/20 flex items-center justify-center">
-                    <Clock className="w-5 h-5 text-green-400" />
-                  </div>
-                  <div>
-                    <h4 className="font-semibold text-white">Real-time Tracking</h4>
-                    <p className="text-sm text-slate-400">Live bus locations</p>
-                  </div>
-                </div>
-              </div>
+            {/* Quick Actions Row */}
+            <div className="mt-4 grid grid-cols-2 md:grid-cols-4 gap-3">
+              <button
+                onClick={() => setExpandedSections(prev => ({ ...prev, availableBuses: true, bookBus: false, yourBookings: false }))}
+                className="p-3 bg-slate-800/50 backdrop-blur-sm rounded-xl border border-slate-700 hover:bg-slate-700/30 transition-colors flex items-center justify-center gap-2"
+              >
+                <Bus className="w-4 h-4" />
+                <span className="text-sm">Buses</span>
+              </button>
+              <button
+                onClick={() => setExpandedSections(prev => ({ ...prev, bookBus: true, availableBuses: false, yourBookings: false }))}
+                className="p-3 bg-slate-800/50 backdrop-blur-sm rounded-xl border border-slate-700 hover:bg-slate-700/30 transition-colors flex items-center justify-center gap-2"
+              >
+                <Ticket className="w-4 h-4" />
+                <span className="text-sm">Book</span>
+              </button>
+              <button
+                onClick={() => setExpandedSections(prev => ({ ...prev, yourBookings: true, availableBuses: false, bookBus: false }))}
+                className="p-3 bg-slate-800/50 backdrop-blur-sm rounded-xl border border-slate-700 hover:bg-slate-700/30 transition-colors flex items-center justify-center gap-2"
+              >
+                <Ticket className="w-4 h-4" />
+                <span className="text-sm">My Bookings</span>
+              </button>
+              <button
+                onClick={() => setMobileMenuOpen(false)}
+                className="p-3 bg-gradient-to-r from-cyan-500 to-blue-600 rounded-xl hover:from-cyan-400 hover:to-blue-500 transition-colors flex items-center justify-center gap-2 lg:hidden"
+              >
+                <Navigation className="w-4 h-4" />
+                <span className="text-sm">View Map</span>
+              </button>
             </div>
           </div>
         </div>

@@ -238,7 +238,7 @@ function migrateTripsTable() {
     // Check if driver_id column exists
     const columns = db.prepare("PRAGMA table_info(trips)").all();
     const hasDriverId = columns.some(col => col.name === 'driver_id');
-    
+
     if (!hasDriverId) {
       console.log('[!] Adding driver_id column to trips table...');
       db.prepare('ALTER TABLE trips ADD COLUMN driver_id INTEGER REFERENCES users(id)').run();
@@ -372,6 +372,18 @@ app.put('/profile', authenticateJWT, (req, res) => {
       return res.status(409).json({ message: 'Email already exists' });
     }
     res.status(500).json({ message: 'Error updating profile', error: err.message });
+  }
+});
+
+// Add this route near your other routes, after the authentication middleware is defined
+app.get('/users', authenticateJWT, authorizeRole(['admin']), (req, res) => {
+  try {
+    // Only allow admin to list all users
+    const users = db.prepare('SELECT id, user_name, email, role, created_at FROM users').all();
+    res.json(users);
+  } catch (err) {
+    console.error("Error fetching users list:", err);
+    res.status(500).json({ message: 'Error fetching users list', error: err.message });
   }
 });
 
