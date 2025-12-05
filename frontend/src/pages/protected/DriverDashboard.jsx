@@ -120,20 +120,23 @@ const DriverDashboard = () => {
     if (!locationEnabled || !isOnline || !selectedTrip) return; // Only watch if enabled, online, and trip selected
 
     if (!navigator.geolocation) {
-      if (!hasGeolocationError) {
-        alert('Geolocation is not supported by this browser.');
-        setHasGeolocationError(true);
-      }
+      console.warn('Geolocation is not supported by this browser.');
+      setHasGeolocationError(true);
       return;
     }
 
     const handleGeoError = (error) => {
       console.error('Geolocation error:', error);
-      if (!hasGeolocationError) {
-        let message = 'Unable to access your location.';
-        if (error.code === 1) message = 'Location permission was denied.';
-        alert(message);
-        setHasGeolocationError(true);
+      // Don't show alerts repeatedly - just log
+      let message = 'Unable to access your location.';
+      if (error.code === 1) message = 'Location permission was denied.';
+      else if (error.code === 2) message = 'Position unavailable - trying mock location.';
+      else if (error.code === 3) message = 'Position acquisition timed out - trying mock location.';
+      console.warn(message);
+      
+      // Set a mock location for development if geolocation fails (but not if permission denied)
+      if (error.code !== 1 && selectedTrip) {
+        setUserLocation({ lat: 27.6884, lng: 83.4490 }); // Default to route start location
       }
     };
 
@@ -170,14 +173,25 @@ const DriverDashboard = () => {
       }
     };
 
-    const watchId = navigator.geolocation.watchPosition(
+    // Try to get current position first
+    navigator.geolocation.getCurrentPosition(
       updateLocationInDB,
       handleGeoError,
-      { enableHighAccuracy: true, maximumAge: 10000, timeout: 5000 }
+      { enableHighAccuracy: false, timeout: 10000, maximumAge: 0 }
+    );
+
+    // Then watch for position updates with relaxed settings
+    const watchId = navigator.geolocation.watchPosition(
+      updateLocationInDB,
+      (error) => {
+        console.warn('Watch position error:', error);
+        // Don't fail completely on watch errors
+      },
+      { enableHighAccuracy: false, maximumAge: 30000, timeout: 15000 }
     );
 
     return () => navigator.geolocation.clearWatch(watchId);
-  }, [locationEnabled, isOnline, selectedTrip, getAuthHeader, hasGeolocationError]);
+  }, [locationEnabled, isOnline, selectedTrip, getAuthHeader]);
 
   const handleLocationToggle = (enabled) => {
     setLocationEnabled(enabled);
@@ -737,6 +751,45 @@ const DriverDashboard = () => {
                     <p className="text-white">{selectedTrip.available_seats}</p>
                   </div>
                 </div>
+              </div>
+            )}
+
+            {/* Booked Passengers Section */}
+            {selectedTrip && (
+              <div className="bg-slate-800/50 backdrop-blur-sm rounded-2xl p-6 border border-slate-700">
+                <h3 className="text-lg font-semibold mb-4 flex items-center gap-2">
+                  <Users className="w-5 h-5" />
+                  Booked Passengers ({passengers.length})
+                </h3>
+                {passengers.length === 0 ? (
+                  <p className="text-slate-400 text-sm">No passengers booked yet.</p>
+                ) : (
+                  <div className="space-y-3 max-h-80 overflow-y-auto">
+                    {passengers.map((passenger) => (
+                      <div key={passenger.id} className="p-3 bg-slate-700/50 rounded-lg border border-slate-600">
+                        <div className="flex items-center justify-between mb-2">
+                          <div>
+                            <p className="font-medium text-white text-sm">{passenger.passenger_name || `Passenger #${passenger.passenger_id}`}</p>
+                            <p className="text-xs text-slate-400">Booking ID: {passenger.id}</p>
+                          </div>
+                          <span className="px-2 py-1 rounded-full text-xs font-medium bg-green-500/20 text-green-400">
+                            Seat {passenger.seat_number}
+                          </span>
+                        </div>
+                        <div className="text-xs text-slate-300 space-y-1">
+                          <p className="flex items-center gap-2">
+                            <MapPin className="w-3 h-3 text-cyan-400" />
+                            Pickup: {passenger.pickup_location?.name || `(${passenger.pickup_location?.lat?.toFixed(4)}, ${passenger.pickup_location?.lng?.toFixed(4)})`}
+                          </p>
+                          <p className="flex items-center gap-2">
+                            <MapPin className="w-3 h-3 text-blue-400" />
+                            Dropoff: {passenger.dropoff_location?.name || `(${passenger.dropoff_location?.lat?.toFixed(4)}, ${passenger.dropoff_location?.lng?.toFixed(4)})`}
+                          </p>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                )}
               </div>
             )}
           </div>

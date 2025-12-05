@@ -232,6 +232,27 @@ createTripLocationsTable(); // New table
 createBookingsTable();
 createDefaultAdmin();
 
+// Database migration: Add driver_id column if it doesn't exist
+function migrateTripsTable() {
+  try {
+    // Check if driver_id column exists
+    const columns = db.prepare("PRAGMA table_info(trips)").all();
+    const hasDriverId = columns.some(col => col.name === 'driver_id');
+    
+    if (!hasDriverId) {
+      console.log('[!] Adding driver_id column to trips table...');
+      db.prepare('ALTER TABLE trips ADD COLUMN driver_id INTEGER REFERENCES users(id)').run();
+      console.log('[✓] driver_id column added to trips table');
+    } else {
+      console.log('[✓] driver_id column already exists in trips table');
+    }
+  } catch (err) {
+    console.error('[✗] Error migrating trips table:', err.message);
+  }
+}
+
+migrateTripsTable();
+
 // Helper functions
 function generateToken(user) {
   const payload = {
@@ -754,7 +775,7 @@ app.post('/trips', authenticateJWT, authorizeRole(['admin', 'driver']), (req, re
 
   try {
     // Check if the route is approved
-    const route = db.prepare('SELECT approved, driver_id as proposed_by_driver_id FROM routes WHERE id = ?').get(route_id);
+    const route = db.prepare('SELECT approved, proposed_by_driver_id FROM routes WHERE id = ?').get(route_id);
     if (!route) {
       return res.status(404).json({ message: 'Route not found.' });
     }
@@ -788,6 +809,7 @@ app.post('/trips', authenticateJWT, authorizeRole(['admin', 'driver']), (req, re
       tripId: result.lastInsertRowid
     });
   } catch (err) {
+    console.error('[ERROR] Failed to create trip:', err);
     res.status(500).json({ message: 'Error creating trip', error: err.message });
   }
 });
