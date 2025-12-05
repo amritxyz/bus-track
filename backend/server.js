@@ -934,6 +934,35 @@ app.get('/bookings', authenticateJWT, (req, res) => {
   }
 });
 
+// Cancel a booking (Passenger only - can only cancel own bookings)
+app.put('/bookings/:id/cancel', authenticateJWT, authorizeRole(['passenger']), (req, res) => {
+  const { id } = req.params;
+
+  try {
+    // Verify the booking belongs to the current passenger
+    const booking = db.prepare('SELECT * FROM bookings WHERE id = ? AND passenger_id = ?').get(id, req.user.id);
+    if (!booking) {
+      return res.status(404).json({ message: 'Booking not found or you do not own this booking.' });
+    }
+
+    // Check if already cancelled
+    if (booking.status === 'cancelled') {
+      return res.status(400).json({ message: 'This booking is already cancelled.' });
+    }
+
+    // Update booking status to cancelled
+    const stmt = db.prepare('UPDATE bookings SET status = ? WHERE id = ?');
+    stmt.run('cancelled', id);
+
+    // Restore available seats to the trip
+    db.prepare('UPDATE trips SET available_seats = available_seats + 1 WHERE id = ?').run(booking.trip_id);
+
+    res.json({ message: 'Booking cancelled successfully', bookingId: id });
+  } catch (err) {
+    res.status(500).json({ message: 'Error cancelling booking', error: err.message });
+  }
+});
+
 // NEW: Endpoint for drivers to update their trip's location
 app.post('/trips/:id/location', authenticateJWT, authorizeRole(['driver']), (req, res) => {
   const { id } = req.params;

@@ -55,6 +55,8 @@ const MapComponent = ({
   showAllRoutes = false // Render polylines for all buses when true
   ,
   routes = [] // Optional array of routes (from /routes) to render polylines
+  ,
+  onBookTrip // callback(routeTrip) when user wants to book a trip from route popup
 }) => {
   const [mapCenter, setMapCenter] = useState([28.0441, 81.0291]); // Default to Butwal, Nepal
   const [mapZoom, setMapZoom] = useState(13);
@@ -328,6 +330,14 @@ const MapComponent = ({
                         <div><strong>Departs:</strong> {t.departure_time ? new Date(t.departure_time).toLocaleString() : 'N/A'}</div>
                         <div><strong>Arrives:</strong> {t.arrival_time ? new Date(t.arrival_time).toLocaleString() : 'N/A'}</div>
                         <div><strong>Seats:</strong> {t.available_seats ?? 'N/A'} | <strong>Fare:</strong> {t.fare ?? 'N/A'}</div>
+                        <div className="mt-1">
+                          <button
+                            onClick={() => onBookTrip && onBookTrip(t)}
+                            className="w-full text-xs py-1 px-2 rounded bg-cyan-500 text-white"
+                          >
+                            Book this trip
+                          </button>
+                        </div>
                         <hr className="my-1" />
                       </div>
                     ))}

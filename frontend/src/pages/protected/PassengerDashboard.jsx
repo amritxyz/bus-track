@@ -148,6 +148,21 @@ const PassengerDashboard = () => {
     // }
   };
 
+  // Handler when user clicks 'Book this trip' from a route popup on the map
+  const handleBookTripFromMap = (trip) => {
+    if (!trip) return;
+    // Ensure trip object corresponds to the same structure used elsewhere
+    setSelectedBus(trip);
+    // Start location selection flow
+    setShowLocationSelection(true);
+    setLocationSelectionStep(0);
+    setPickupLocation(null);
+    setDropoffLocation(null);
+    // Optionally scroll booking panel into view
+    const bookingPanel = document.querySelector('[data-booking-panel]');
+    if (bookingPanel) bookingPanel.scrollIntoView({ behavior: 'smooth', block: 'center' });
+  };
+
   // Handle map click for location selection during booking
   const handleMapClickForLocation = (location) => {
     if (!showLocationSelection) return;
@@ -206,13 +221,31 @@ const PassengerDashboard = () => {
 
     setBookingLoading(true);
     try {
-      // Find an available seat number (this is a simplification)
+      // Ensure seats are available
       if (selectedBus.available_seats <= 0) {
         alert('No seats available on this trip.');
         setBookingLoading(false);
         return;
       }
-      const seatNumber = 1; // Simplified
+
+      // Determine the next available seat number by querying existing bookings for this trip
+      let seatNumber = 1;
+      try {
+        const bkResp = await fetch(`http://localhost:5000/bookings?trip_id=${selectedBus.id}`, {
+          headers: getAuthHeader(),
+        });
+        if (bkResp.ok) {
+          const existing = await bkResp.json();
+          const taken = new Set(existing.filter(b => b.status !== 'cancelled').map(b => Number(b.seat_number)));
+          while (taken.has(seatNumber)) seatNumber += 1;
+        } else {
+          // If we couldn't fetch bookings, fall back to seat 1
+          seatNumber = 1;
+        }
+      } catch (err) {
+        console.warn('Could not determine taken seats, defaulting to seat 1', err);
+        seatNumber = 1;
+      }
 
       const bookingData = {
         trip_id: selectedBus.id,
@@ -302,7 +335,7 @@ const PassengerDashboard = () => {
           {/* Left Panel - Booking Controls */}
           <div className="space-y-6">
             {/* Available Trips List */}
-            <div className="bg-slate-800/50 backdrop-blur-sm rounded-2xl p-6 border border-slate-700">
+            <div data-booking-panel className="bg-slate-800/50 backdrop-blur-sm rounded-2xl p-6 border border-slate-700">
               <h2 className="text-xl font-semibold mb-4 flex items-center gap-2">
                 <Bus className="w-5 h-5" />
                 Available Buses ({buses.length})
@@ -496,6 +529,7 @@ const PassengerDashboard = () => {
                   showRouteForSelectedBus={!!selectedBus} // Always show route when bus is selected
                   showAllRoutes={true} // Show all bus routes on passenger map
                   routes={memoRoutes}
+                  onBookTrip={handleBookTripFromMap}
                 />
               </div>
             </div>
