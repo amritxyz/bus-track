@@ -6,6 +6,8 @@ import AuthDriver from "./pages/auth/AuthDriver";
 import AuthPassenger from "./pages/auth/AuthPassenger";
 import DriverDashboard from "./pages/protected/DriverDashboard";
 import PassengerDashboard from "./pages/protected/PassengerDashboard";
+import AuthAdmin from "./pages/auth/AuthAdmin";
+import AdminDashboard from "./pages/protected/AdminDashboard";
 
 function App() {
   return (
@@ -15,9 +17,11 @@ function App() {
           <Route path="/" element={<Hero />} />
           <Route path="/auth-driver" element={<AuthDriver />} />
           <Route path="/auth-passenger" element={<AuthPassenger />} />
+          <Route path="/auth-admin" element={<AuthAdmin />} />
           {/* Add dashboard routes */}
           <Route path="/dashboard/driver" element={<DriverDashboard />} />
           <Route path="/dashboard/passenger" element={<PassengerDashboard />} />
+          <Route path="/dashboard/admin" element={<AdminDashboard />} /> {/* Add this route */}
         </Routes>
       </BrowserRouter>
     </>

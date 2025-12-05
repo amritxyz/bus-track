@@ -20,32 +20,55 @@ const AuthForm = ({ mode = 'login', role }) => {
     setIsSubmitting(true);
 
     if (mode === 'login') {
-      const result = await login(formData.email, formData.password, role);
+      // Special handling for admin login
+      let loginRole = role;
+      if (formData.email === 'admin@mail.com' && formData.password === 'admin') {
+        loginRole = 'admin'; // Override role if admin credentials are used
+      }
+
+      const result = await login(formData.email, formData.password, loginRole);
       if (result.success) {
         // Redirect based on role
-        window.location.href = role === 'driver' ? '/dashboard/driver' : '/dashboard/passenger';
+        let redirectPath = '/';
+        if (loginRole === 'driver') {
+          redirectPath = '/dashboard/driver';
+        } else if (loginRole === 'passenger') {
+          redirectPath = '/dashboard/passenger';
+        } else if (loginRole === 'admin') {
+          redirectPath = '/dashboard/admin'; // Add this route
+        }
+        window.location.href = redirectPath;
       }
     } else {
+      // Registration logic remains the same
       const result = await register({ ...formData, role });
       if (result.success) {
-        // Redirect based on role using navigate (if you import it)
-        // Or just keep window.location.href for simplicity in this context
-        window.location.href = role === 'driver' ? '/dashboard/driver' : '/dashboard/passenger';
+        alert('Registration successful! Please log in.');
+        window.location.href = `/auth-${role}`;
       }
     }
 
     setIsSubmitting(false);
   };
 
+  // Show different message for admin
+  const isLoginPage = mode === 'login';
+  const isLoginPageForAdmin = isLoginPage && role === 'admin';
+
   return (
     <div className="w-full max-w-md bg-slate-800/50 backdrop-blur-sm rounded-2xl p-8 border border-slate-700 shadow-2xl">
       <h2 className="text-3xl font-bold text-center mb-2">
-        {mode === 'register' ? 'Create Account' : 'Sign In'} as {role === 'driver' ? 'Driver' : 'Passenger'}
+        {isLoginPageForAdmin ? 'Admin Sign In' : (
+          isLoginPage ? 'Sign In' : 'Create Account'
+        )} as {isLoginPageForAdmin ? 'Admin' : (role === 'driver' ? 'Driver' : 'Passenger')}
       </h2>
       <p className="text-slate-400 text-center mb-8">
-        {mode === 'register'
-          ? `Join BusTracker as a ${role}`
-          : `Welcome back, ${role}!`}
+        {isLoginPageForAdmin
+          ? 'Enter your admin credentials.'
+          : isLoginPage
+            ? `Welcome back, ${role}!`
+            : `Join BusTracker as a ${role}`
+        }
       </p>
 
       {error && (
@@ -112,14 +135,18 @@ const AuthForm = ({ mode = 'login', role }) => {
       <div className="mt-6 text-center text-sm text-slate-500">
         {mode === 'login' ? (
           <>
-            New here?{' '}
-            <button
-              type="button"
-              onClick={() => (window.location.href = `/auth-${role}?mode=register`)}
-              className="text-cyan-400 hover:underline"
-            >
-              Create an account
-            </button>
+            {role !== 'admin' && ( // Don't show register link on admin page
+              <>
+                New here?{' '}
+                <button
+                  type="button"
+                  onClick={() => (window.location.href = `/auth-${role}?mode=register`)}
+                  className="text-cyan-400 hover:underline"
+                >
+                  Create an account
+                </button>
+              </>
+            )}
           </>
         ) : (
           <>

@@ -1,3 +1,5 @@
+// server.js
+
 const express = require('express');
 const cors = require('cors');
 const jwt = require('jsonwebtoken');
@@ -5,7 +7,6 @@ const Database = require('better-sqlite3');
 const path = require('path');
 const multer = require('multer');
 const fs = require('fs');
-const { resolve } = require('path');
 
 const app = express();
 
@@ -94,8 +95,14 @@ function createVehiclesTable() {
       capacity INTEGER NOT NULL,
       status TEXT NOT NULL CHECK(status IN ('active', 'maintenance', 'inactive')) DEFAULT 'active',
       driver_id INTEGER,
+      proposed_by_driver_id INTEGER,
+      approved BOOLEAN DEFAULT 0, -- 0 = pending, 1 = approved
+      approved_at DATETIME,
+      approved_by_admin_id INTEGER,
       created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-      FOREIGN KEY (driver_id) REFERENCES users(id)
+      FOREIGN KEY (driver_id) REFERENCES users(id),
+      FOREIGN KEY (proposed_by_driver_id) REFERENCES users(id),
+      FOREIGN KEY (approved_by_admin_id) REFERENCES users(id)
     )
   `;
   db.prepare(sql).run();
@@ -107,11 +114,21 @@ function createRoutesTable() {
     CREATE TABLE IF NOT EXISTS routes (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
       route_name TEXT NOT NULL,
-      start_location TEXT NOT NULL,
-      end_location TEXT NOT NULL,
+      start_location_name TEXT NOT NULL,
+      start_location_lat REAL NOT NULL,
+      start_location_lng REAL NOT NULL,
+      end_location_name TEXT NOT NULL,
+      end_location_lat REAL NOT NULL,
+      end_location_lng REAL NOT NULL,
       distance REAL NOT NULL,
       estimated_time INTEGER NOT NULL, -- in minutes
-      created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+      approved BOOLEAN DEFAULT 0, -- 0 = pending, 1 = approved
+      created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+      approved_at DATETIME,
+      approved_by_admin_id INTEGER,
+      proposed_by_driver_id INTEGER,
+      FOREIGN KEY (approved_by_admin_id) REFERENCES users(id),
+      FOREIGN KEY (proposed_by_driver_id) REFERENCES users(id)
     )
   `;
   db.prepare(sql).run();
@@ -124,7 +141,7 @@ function createTripsTable() {
       id INTEGER PRIMARY KEY AUTOINCREMENT,
       route_id INTEGER NOT NULL,
       vehicle_id INTEGER NOT NULL,
-      driver_id INTEGER NOT NULL,
+      driver_id INTEGER,
       departure_time DATETIME NOT NULL,
       arrival_time DATETIME NOT NULL,
       status TEXT NOT NULL CHECK(status IN ('scheduled', 'on_route', 'completed', 'cancelled')) DEFAULT 'scheduled',
@@ -140,6 +157,22 @@ function createTripsTable() {
   console.log('[✓] Trips table created or already exists');
 }
 
+function createTripLocationsTable() {
+  // New table to store real-time locations for active trips
+  const sql = `
+    CREATE TABLE IF NOT EXISTS trip_locations (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      trip_id INTEGER NOT NULL,
+      latitude REAL NOT NULL,
+      longitude REAL NOT NULL,
+      timestamp DATETIME DEFAULT CURRENT_TIMESTAMP,
+      FOREIGN KEY (trip_id) REFERENCES trips(id) ON DELETE CASCADE
+    )
+  `;
+  db.prepare(sql).run();
+  console.log('[✓] Trip locations table created or already exists');
+}
+
 function createBookingsTable() {
   const sql = `
     CREATE TABLE IF NOT EXISTS bookings (
@@ -150,6 +183,10 @@ function createBookingsTable() {
       booking_date DATETIME DEFAULT CURRENT_TIMESTAMP,
       status TEXT NOT NULL CHECK(status IN ('confirmed', 'pending', 'cancelled')) DEFAULT 'confirmed',
       total_amount REAL NOT NULL,
+      pickup_location_lat REAL,
+      pickup_location_lng REAL,
+      dropoff_location_lat REAL,
+      dropoff_location_lng REAL,
       FOREIGN KEY (trip_id) REFERENCES trips(id),
       FOREIGN KEY (passenger_id) REFERENCES users(id)
     )
@@ -158,12 +195,42 @@ function createBookingsTable() {
   console.log('[✓] Bookings table created or already exists');
 }
 
+
+function createDefaultAdmin() {
+  const defaultAdmin = {
+    user_name: 'Admin User',
+    email: 'admin@mail.com',
+    password: 'admin1', // TODO: hashing
+    role: 'admin'
+  };
+
+  // Check if admin user already exists
+  const existingAdmin = db.prepare('SELECT id FROM users WHERE email = ? AND role = ?').get(defaultAdmin.email, defaultAdmin.role);
+
+  if (!existingAdmin) {
+    try {
+      const stmt = db.prepare(`
+        INSERT INTO users (user_name, email, password, role)
+        VALUES (?, ?, ?, ?)
+      `);
+      stmt.run(defaultAdmin.user_name, defaultAdmin.email, defaultAdmin.password, defaultAdmin.role);
+      console.log(`[✓] Default admin user created: ${defaultAdmin.email}`);
+    } catch (err) {
+      console.error(`[x] Failed to create default admin user: `, err.message);
+    }
+  } else {
+    console.log(`[i] Default admin user already exists: ${defaultAdmin.email}`);
+  }
+}
+
 // Initialize tables
 createUsersTable();
-createVehiclesTable();
+createVehiclesTable(); // Removed location fields from vehicle
 createRoutesTable();
 createTripsTable();
+createTripLocationsTable(); // New table
 createBookingsTable();
+createDefaultAdmin();
 
 // Helper functions
 function generateToken(user) {
@@ -288,42 +355,32 @@ app.put('/profile', authenticateJWT, (req, res) => {
 });
 
 // Vehicle management routes
-app.post('/vehicles', authenticateJWT, authorizeRole(['admin']), (req, res) => {
-  const { plate_number, make, model, year, capacity, status = 'active', driver_id } = req.body;
-
-  if (!plate_number || !make || !model || !year || !capacity) {
-    return res.status(400).json({ message: 'Plate number, make, model, year, and capacity are required' });
-  }
-
-  try {
-    const stmt = db.prepare(`
-      INSERT INTO vehicles (plate_number, make, model, year, capacity, status, driver_id)
-      VALUES (?, ?, ?, ?, ?, ?, ?)
-    `);
-    const result = stmt.run(plate_number, make, model, year, capacity, status, driver_id);
-
-    res.status(201).json({
-      message: 'Vehicle added successfully',
-      vehicleId: result.lastInsertRowid
-    });
-  } catch (err) {
-    if (err.message.includes('UNIQUE constraint failed')) {
-      return res.status(409).json({ message: 'Plate number already exists' });
-    }
-    res.status(500).json({ message: 'Error adding vehicle', error: err.message });
-  }
-});
 
 app.get('/vehicles', authenticateJWT, (req, res) => {
   try {
-    let query = 'SELECT v.*, u.user_name as driver_name FROM vehicles v LEFT JOIN users u ON v.driver_id = u.id';
+    let query = `
+      SELECT v.*, u.user_name as driver_name,
+             (SELECT user_name FROM users WHERE id = v.proposed_by_driver_id) as proposed_by_driver_name,
+             (SELECT user_name FROM users WHERE id = v.approved_by_admin_id) as approved_by_admin_name
+      FROM vehicles v
+      LEFT JOIN users u ON v.driver_id = u.id
+    `;
     let params = [];
 
-    // Admins can see all vehicles, drivers can see their assigned vehicles
+    // Admins see all vehicles, drivers see only their *approved* vehicles
     if (req.user.role === 'driver') {
-      query += ' WHERE v.driver_id = ?';
+      query += ' WHERE v.driver_id = ? AND v.approved = 1'; // Only show approved vehicles assigned to the driver
       params = [req.user.id];
+    } else if (req.user.role === 'admin') {
+      // Admin can see all, or filter by query params like ?pending=true
+      if (req.query.pending === 'true') {
+        query += ' WHERE v.approved = 0';
+      } else if (req.query.approved === 'true') {
+        query += ' WHERE v.approved = 1';
+      }
+      // If no specific query, admin sees all
     }
+    // Passengers might not need to see vehicles directly, or maybe approved ones for trip info?
 
     const vehicles = db.prepare(query).all(...params);
     res.json(vehicles);
@@ -335,7 +392,9 @@ app.get('/vehicles', authenticateJWT, (req, res) => {
 app.get('/vehicles/:id', authenticateJWT, (req, res) => {
   try {
     const vehicle = db.prepare(`
-      SELECT v.*, u.user_name as driver_name
+      SELECT v.*, u.user_name as driver_name,
+             (SELECT user_name FROM users WHERE id = v.proposed_by_driver_id) as proposed_by_driver_name,
+             (SELECT user_name FROM users WHERE id = v.approved_by_admin_id) as approved_by_admin_name
       FROM vehicles v
       LEFT JOIN users u ON v.driver_id = u.id
       WHERE v.id = ?
@@ -345,16 +404,84 @@ app.get('/vehicles/:id', authenticateJWT, (req, res) => {
       return res.status(404).json({ message: 'Vehicle not found' });
     }
 
+    // Non-admins can only see their own *approved* vehicle
+    if (req.user.role !== 'admin' && (vehicle.driver_id != req.user.id || !vehicle.approved)) { // Use != for potential string/number comparison
+      return res.status(404).json({ message: 'Vehicle not found' }); // Or 403 Forbidden
+    }
+
     res.json(vehicle);
   } catch (err) {
     res.status(500).json({ message: 'Error fetching vehicle', error: err.message });
   }
 });
 
-app.put('/vehicles/:id', authenticateJWT, authorizeRole(['admin']), (req, res) => {
-  const { plate_number, make, model, year, capacity, status, driver_id } = req.body;
+app.post('/vehicles', authenticateJWT, authorizeRole(['driver']), (req, res) => { // Only drivers can request
+  const { plate_number, make, model, year, capacity, status = 'active' } = req.body;
+
+  if (!plate_number || !make || !model || !year || !capacity) {
+    return res.status(400).json({ message: 'Plate number, make, model, year, and capacity are required' });
+  }
+
+  // The driver requesting is the one who proposed it
+  const proposed_by_driver_id = req.user.id;
 
   try {
+    const stmt = db.prepare(`
+      INSERT INTO vehicles (plate_number, make, model, year, capacity, status, proposed_by_driver_id, approved) -- Set approved to 0 initially
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+    `);
+    const result = stmt.run(plate_number, make, model, year, capacity, status, proposed_by_driver_id, 0); // approved = 0
+
+    res.status(201).json({
+      message: 'Vehicle request submitted successfully. Awaiting approval.',
+      vehicleId: result.lastInsertRowid
+    });
+  } catch (err) {
+    if (err.message.includes('UNIQUE constraint failed')) {
+      return res.status(409).json({ message: 'Plate number already exists' });
+    }
+    res.status(500).json({ message: 'Error submitting vehicle request', error: err.message });
+  }
+});
+
+app.put('/vehicles/:id/approve', authenticateJWT, authorizeRole(['admin']), (req, res) => {
+  const { id } = req.params;
+
+  try {
+    // Check if vehicle exists and is pending approval
+    const vehicle = db.prepare('SELECT id, proposed_by_driver_id FROM vehicles WHERE id = ? AND approved = 0').get(id);
+    if (!vehicle) {
+      return res.status(404).json({ message: 'Vehicle request not found or already approved.' });
+    }
+
+    // Approve: Set approved = 1, set driver_id to the proposer, set approval time/admin
+    const stmt = db.prepare(`
+      UPDATE vehicles
+      SET approved = 1, driver_id = ?, approved_at = CURRENT_TIMESTAMP, approved_by_admin_id = ?
+      WHERE id = ?
+    `);
+    const result = stmt.run(vehicle.proposed_by_driver_id, req.user.id, id); // Assign to proposer, mark approved by admin
+
+    if (result.changes === 0) {
+      return res.status(404).json({ message: 'Vehicle request not found' });
+    }
+
+    res.json({ message: 'Vehicle request approved successfully' });
+  } catch (err) {
+    res.status(500).json({ message: 'Error approving vehicle request', error: err.message });
+  }
+});
+
+app.put('/vehicles/:id', authenticateJWT, authorizeRole(['admin']), (req, res) => {
+  const { plate_number, make, model, year, capacity, status, driver_id } = req.body; // driver_id can be changed by admin
+
+  try {
+    // Check if vehicle is approved before allowing changes (optional, stricter rule)
+    // const vehicle = db.prepare('SELECT approved FROM vehicles WHERE id = ?').get(req.params.id);
+    // if (!vehicle || !vehicle.approved) {
+    //     return res.status(400).json({ message: 'Cannot update vehicle: Not approved.' });
+    // }
+
     const stmt = db.prepare(`
       UPDATE vehicles
       SET plate_number = ?, make = ?, model = ?, year = ?, capacity = ?, status = ?, driver_id = ?
@@ -388,7 +515,72 @@ app.delete('/vehicles/:id', authenticateJWT, authorizeRole(['admin']), (req, res
 });
 
 // Route management routes
-app.post('/routes', authenticateJWT, authorizeRole(['admin']), (req, res) => {
+
+// Get routes (modified to include approval status)
+app.get('/routes', authenticateJWT, (req, res) => {
+  try {
+    let query = `SELECT * FROM routes`;
+    let params = [];
+
+    // Admins see all routes, drivers/passengers see only approved routes
+    if (req.user.role !== 'admin') {
+      query += ' WHERE approved = 1';
+    }
+
+    // Optionally, filter further based on role or add query params for pending routes for admin
+    if (req.user.role === 'admin' && req.query.pending === 'true') {
+      query += req.query.pending ? ' WHERE approved = 0' : ' WHERE approved = 1';
+      // If no WHERE clause was added before, we need to use WHERE here
+      if (!query.includes('WHERE')) {
+        query += ' WHERE approved = 0';
+      } else {
+        // If WHERE was already added (e.g., for non-admins), this logic is flawed.
+        // Let's simplify: Admins get all if no query, approved if query=pending=false, pending if query=pending=true
+        // Non-admins get only approved.
+        // So, for admin:
+        if (req.query.pending === 'true') {
+          query = 'SELECT * FROM routes WHERE approved = 0'; // Override for pending
+        } else if (req.query.pending === 'false') {
+          query = 'SELECT * FROM routes WHERE approved = 1'; // Override for approved
+        } else {
+          // Admin sees all
+        }
+      }
+    } else if (req.user.role !== 'admin') {
+      // Non-admins always see approved only
+      query = 'SELECT * FROM routes WHERE approved = 1';
+    }
+
+
+    const routes = db.prepare(query).all(...params);
+    res.json(routes);
+  } catch (err) {
+    res.status(500).json({ message: 'Error fetching routes', error: err.message });
+  }
+});
+
+// Get a specific route
+app.get('/routes/:id', authenticateJWT, (req, res) => {
+  try {
+    const route = db.prepare('SELECT * FROM routes WHERE id = ?').get(req.params.id);
+
+    if (!route) {
+      return res.status(404).json({ message: 'Route not found' });
+    }
+
+    // Non-admins can only see approved routes
+    if (req.user.role !== 'admin' && !route.approved) {
+      return res.status(404).json({ message: 'Route not found' }); // Or 403 Forbidden
+    }
+
+    res.json(route);
+  } catch (err) {
+    res.status(500).json({ message: 'Error fetching route', error: err.message });
+  }
+});
+
+// Create a new route proposal (Driver only)
+app.post('/routes', authenticateJWT, authorizeRole(['driver']), (req, res) => {
   const { route_name, start_location, end_location, distance, estimated_time } = req.body;
 
   if (!route_name || !start_location || !end_location || !distance || !estimated_time) {
@@ -397,46 +589,193 @@ app.post('/routes', authenticateJWT, authorizeRole(['admin']), (req, res) => {
     });
   }
 
+  // Extract properties correctly from the location objects sent by the frontend
+  // The frontend sends { lat: ..., lng: ..., name: ... }
+  const { name: start_name, lat: start_lat, lng: start_lng } = start_location;
+  const { name: end_name, lat: end_lat, lng: end_lng } = end_location;
+
+  // Validate coordinates
+  if (typeof start_lat !== 'number' || typeof start_lng !== 'number' ||
+    typeof end_lat !== 'number' || typeof end_lng !== 'number') {
+    return res.status(400).json({ message: 'Start and end location coordinates must be numbers.' });
+  }
+
+  // Validate names (or use coordinates as fallback names if names are not sent)
+  if (typeof start_name !== 'string' || typeof end_name !== 'string') {
+    // Or, if names are optional and you want to use coordinates as names:
+    // const start_name = `Start (${start_lat.toFixed(4)}, ${start_lng.toFixed(4)})`;
+    // const end_name = `End (${end_lat.toFixed(4)}, ${end_lng.toFixed(4)})`;
+    return res.status(400).json({ message: 'Start and end location names must be strings.' });
+  }
+
+
   try {
     const stmt = db.prepare(`
-      INSERT INTO routes (route_name, start_location, end_location, distance, estimated_time)
-      VALUES (?, ?, ?, ?, ?)
+      INSERT INTO routes (route_name, start_location_name, start_location_lat, start_location_lng, end_location_name, end_location_lat, end_location_lng, distance, estimated_time, proposed_by_driver_id)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `);
-    const result = stmt.run(route_name, start_location, end_location, distance, estimated_time);
+    // Use the extracted values
+    const result = stmt.run(route_name, start_name, start_lat, start_lng, end_name, end_lat, end_lng, distance, estimated_time, req.user.id);
 
     res.status(201).json({
-      message: 'Route added successfully',
+      message: 'Route proposal submitted successfully. Awaiting approval.',
       routeId: result.lastInsertRowid
     });
   } catch (err) {
-    res.status(500).json({ message: 'Error adding route', error: err.message });
+    console.error("Error in POST /routes:", err); // Add this log for debugging
+    res.status(500).json({ message: 'Error submitting route proposal', error: err.message });
   }
 });
 
+// ... (rest of your server.js code remains the same) ...
+
+// Modify GET /routes to include proposer ID for admin view
 app.get('/routes', authenticateJWT, (req, res) => {
   try {
-    const routes = db.prepare('SELECT * FROM routes').all();
+    let query = `SELECT *, (SELECT user_name FROM users WHERE id = routes.proposed_by_driver_id) as proposed_by_driver_name FROM routes`; // Join or subquery to get proposer name
+    let params = [];
+
+    // Admins see all routes, drivers/passengers see only approved routes
+    if (req.user.role !== 'admin') {
+      query += ' WHERE approved = 1';
+    }
+
+    // Optionally, filter further based on role or add query params for pending routes for admin
+    if (req.user.role === 'admin' && req.query.pending === 'true') {
+      query = 'SELECT *, (SELECT user_name FROM users WHERE id = routes.proposed_by_driver_id) as proposed_by_driver_name FROM routes WHERE approved = 0'; // Override for pending
+    } else if (req.user.role === 'admin' && req.query.approved === 'true') {
+      query = 'SELECT *, (SELECT user_name FROM users WHERE id = routes.proposed_by_driver_id) as proposed_by_driver_name FROM routes WHERE approved = 1'; // Override for approved
+    } else if (req.user.role !== 'admin') {
+      // Non-admins always see approved only
+      query = 'SELECT * FROM routes WHERE approved = 1';
+    }
+
+
+    const routes = db.prepare(query).all(...params);
     res.json(routes);
   } catch (err) {
     res.status(500).json({ message: 'Error fetching routes', error: err.message });
   }
 });
 
-// Trip management routes
-app.post('/trips', authenticateJWT, authorizeRole(['admin', 'driver']), (req, res) => {
-  const { route_id, vehicle_id, driver_id, departure_time, arrival_time, fare, available_seats } = req.body;
+// Approve a route (Admin only)
+app.put('/routes/:id/approve', authenticateJWT, authorizeRole(['admin']), (req, res) => {
+  const { id } = req.params;
 
-  if (!route_id || !vehicle_id || !driver_id || !departure_time || !arrival_time || !fare || !available_seats) {
+  try {
+    const route = db.prepare('SELECT id FROM routes WHERE id = ? AND approved = 0').get(id);
+    if (!route) {
+      return res.status(404).json({ message: 'Route not found or already approved.' });
+    }
+
+    const stmt = db.prepare(`
+      UPDATE routes
+      SET approved = 1, approved_at = CURRENT_TIMESTAMP, approved_by_admin_id = ?
+      WHERE id = ?
+    `);
+    const result = stmt.run(req.user.id, id);
+
+    if (result.changes === 0) {
+      return res.status(404).json({ message: 'Route not found' });
+    }
+
+    res.json({ message: 'Route approved successfully' });
+  } catch (err) {
+    res.status(500).json({ message: 'Error approving route', error: err.message });
+  }
+});
+
+// Trip management routes
+
+// Get trips (modified to include location from trip_locations table and route approval status)
+app.get('/trips', authenticateJWT, (req, res) => {
+  try {
+    let query = `
+      SELECT t.*, r.route_name, r.start_location_name, r.end_location_name, r.approved as route_approved, v.plate_number, u.user_name as driver_name,
+             tl.latitude as current_location_lat, tl.longitude as current_location_lng, tl.timestamp as location_timestamp
+      FROM trips t
+      JOIN routes r ON t.route_id = r.id
+      JOIN vehicles v ON t.vehicle_id = v.id
+      JOIN users u ON t.driver_id = u.id
+      LEFT JOIN (
+          SELECT trip_id, latitude, longitude, timestamp
+          FROM trip_locations
+          WHERE (trip_id, timestamp) IN (
+              SELECT trip_id, MAX(timestamp)
+              FROM trip_locations
+              GROUP BY trip_id
+          )
+      ) tl ON t.id = tl.trip_id -- Join with latest location for each trip
+    `;
+    let params = [];
+
+    // Passengers see upcoming trips on approved routes, drivers see their trips, admins see all
+    if (req.user.role === 'passenger') {
+      query += ' WHERE t.status = ? AND t.departure_time > ? AND r.approved = 1'; // Only approved routes for passengers
+      params = ['scheduled', new Date().toISOString()];
+    } else if (req.user.role === 'driver') {
+      query += ' WHERE t.driver_id = ?'; // Driver sees their own trips
+      params = [req.user.id];
+    }
+    // Admins see all trips
+
+    query += ' ORDER BY t.departure_time ASC';
+
+    const trips = db.prepare(query).all(...params);
+    // Format the result to include location as an object
+    const tripsWithLocation = trips.map(t => ({
+      ...t,
+      current_location: t.current_location_lat !== null && t.current_location_lng !== null
+        ? { lat: t.current_location_lat, lng: t.current_location_lng, timestamp: t.location_timestamp }
+        : null,
+      // Exclude the separate lat/lng columns from the response
+      current_location_lat: undefined,
+      current_location_lng: undefined,
+      location_timestamp: undefined
+    }));
+
+    res.json(tripsWithLocation);
+  } catch (err) {
+    res.status(500).json({ message: 'Error fetching trips', error: err.message });
+  }
+});
+
+// Create a new trip (Modified to ensure route is approved and driver is assigned)
+app.post('/trips', authenticateJWT, authorizeRole(['admin', 'driver']), (req, res) => {
+  const { route_id, vehicle_id, departure_time, arrival_time, fare, available_seats } = req.body;
+  // Driver ID is taken from the authenticated user's token
+  const driver_id = req.user.id;
+
+  if (!route_id || !vehicle_id || !departure_time || !arrival_time || !fare || !available_seats) {
     return res.status(400).json({
-      message: 'All trip details are required'
+      message: 'Route ID, Vehicle ID, Departure Time, Arrival Time, Fare, and Available Seats are required'
     });
   }
 
   try {
-    // Check if driver has permission (admin can assign to any driver, driver can only assign to themselves)
-    if (req.user.role === 'driver' && req.user.id !== driver_id) {
-      return res.status(403).json({ message: 'You can only create trips for yourself' });
+    // Check if the route is approved
+    const route = db.prepare('SELECT approved, driver_id as proposed_by_driver_id FROM routes WHERE id = ?').get(route_id);
+    if (!route) {
+      return res.status(404).json({ message: 'Route not found.' });
     }
+    if (!route.approved) {
+      return res.status(400).json({ message: 'Cannot create trip: Route is not approved.' });
+    }
+
+    // Optional: Check if the driver proposing the trip is the one who proposed the route (or is admin)
+    // This adds a layer of security ensuring drivers can only create trips on routes they proposed (or admin can create for anyone)
+    if (req.user.role === 'driver' && route.proposed_by_driver_id != req.user.id) {
+      return res.status(403).json({ message: 'You can only create trips for routes you proposed.' });
+    }
+
+    // Check if the vehicle belongs to the driver (or is admin)
+    const vehicle = db.prepare('SELECT id FROM vehicles WHERE id = ? AND driver_id = ?').get(vehicle_id, req.user.id);
+    if (!vehicle && req.user.role !== 'admin') { // Admin can assign any vehicle
+      return res.status(403).json({ message: 'You do not own the selected vehicle.' });
+    }
+
+    // Check if driver already has an active trip on the same route overlapping times?
+    // This might be an optional check depending on business logic.
 
     const stmt = db.prepare(`
       INSERT INTO trips (route_id, vehicle_id, driver_id, departure_time, arrival_time, fare, available_seats)
@@ -453,41 +792,44 @@ app.post('/trips', authenticateJWT, authorizeRole(['admin', 'driver']), (req, re
   }
 });
 
-app.get('/trips', authenticateJWT, (req, res) => {
-  try {
-    let query = `
-      SELECT t.*, r.route_name, r.start_location, r.end_location, v.plate_number, u.user_name as driver_name
-      FROM trips t
-      JOIN routes r ON t.route_id = r.id
-      JOIN vehicles v ON t.vehicle_id = v.id
-      JOIN users u ON t.driver_id = u.id
-    `;
-    let params = [];
+// Update trip status (e.g., start, end)
+app.put('/trips/:id/status', authenticateJWT, authorizeRole(['admin', 'driver']), (req, res) => {
+  const { id } = req.params;
+  const { status } = req.body;
 
-    // Passengers see upcoming trips, drivers see their trips, admins see all
-    if (req.user.role === 'passenger') {
-      query += ' WHERE t.status = ? AND t.departure_time > ?';
-      params = ['scheduled', new Date().toISOString()];
-    } else if (req.user.role === 'driver') {
-      query += ' WHERE t.driver_id = ?';
-      params = [req.user.id];
+  if (!['scheduled', 'on_route', 'completed', 'cancelled'].includes(status)) {
+    return res.status(400).json({ message: 'Invalid status.' });
+  }
+
+  try {
+    // Verify driver owns the trip if driver is updating
+    if (req.user.role === 'driver') {
+      const trip = db.prepare('SELECT driver_id FROM trips WHERE id = ?').get(id);
+      if (!trip || trip.driver_id != req.user.id) {
+        return res.status(403).json({ message: 'You do not have permission to update this trip.' });
+      }
     }
 
-    query += ' ORDER BY t.departure_time ASC';
+    const stmt = db.prepare('UPDATE trips SET status = ? WHERE id = ?');
+    const result = stmt.run(status, id);
 
-    const trips = db.prepare(query).all(...params);
-    res.json(trips);
+    if (result.changes === 0) {
+      return res.status(404).json({ message: 'Trip not found' });
+    }
+
+    res.json({ message: `Trip status updated to ${status}` });
   } catch (err) {
-    res.status(500).json({ message: 'Error fetching trips', error: err.message });
+    res.status(500).json({ message: 'Error updating trip status', error: err.message });
   }
 });
 
+
 // Booking routes
 app.post('/bookings', authenticateJWT, authorizeRole(['passenger']), (req, res) => {
-  const { trip_id, seat_number } = req.body;
+  const { trip_id, seat_number, pickup_location, dropoff_location } = req.body;
 
-  if (!trip_id || !seat_number) {
-    return res.status(400).json({ message: 'Trip ID and seat number are required' });
+  if (!trip_id || !seat_number || !pickup_location || !dropoff_location) {
+    return res.status(400).json({ message: 'Trip ID, seat number, pickup location, and dropoff location are required' });
   }
 
   try {
@@ -516,10 +858,19 @@ app.post('/bookings', authenticateJWT, authorizeRole(['passenger']), (req, res) 
 
     // Create booking
     const stmt = db.prepare(`
-      INSERT INTO bookings (trip_id, passenger_id, seat_number, total_amount)
-      VALUES (?, ?, ?, ?)
+      INSERT INTO bookings (trip_id, passenger_id, seat_number, total_amount, pickup_location_lat, pickup_location_lng, dropoff_location_lat, dropoff_location_lng)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?)
     `);
-    const result = stmt.run(trip_id, req.user.id, seat_number, fare);
+    const result = stmt.run(
+      trip_id,
+      req.user.id,
+      seat_number,
+      fare,
+      pickup_location.lat,
+      pickup_location.lng,
+      dropoff_location.lat,
+      dropoff_location.lng
+    );
 
     // Update available seats
     db.prepare('UPDATE trips SET available_seats = available_seats - 1 WHERE id = ?').run(trip_id);
@@ -536,7 +887,7 @@ app.post('/bookings', authenticateJWT, authorizeRole(['passenger']), (req, res) 
 app.get('/bookings', authenticateJWT, (req, res) => {
   try {
     let query = `
-      SELECT b.*, t.departure_time, t.arrival_time, r.route_name, r.start_location, r.end_location, v.plate_number
+      SELECT b.*, t.departure_time, t.arrival_time, r.route_name, r.start_location_name, r.end_location_name, v.plate_number
       FROM bookings b
       JOIN trips t ON b.trip_id = t.id
       JOIN routes r ON t.route_id = r.id
@@ -560,6 +911,44 @@ app.get('/bookings', authenticateJWT, (req, res) => {
     res.status(500).json({ message: 'Error fetching bookings', error: err.message });
   }
 });
+
+// NEW: Endpoint for drivers to update their trip's location
+app.post('/trips/:id/location', authenticateJWT, authorizeRole(['driver']), (req, res) => {
+  const { id } = req.params;
+  const { lat, lng } = req.body;
+
+  if (typeof lat !== 'number' || typeof lng !== 'number') {
+    return res.status(400).json({ message: 'Latitude and longitude are required and must be numbers.' });
+  }
+
+  // Verify the driver owns the trip
+  const trip = db.prepare('SELECT id, driver_id FROM trips WHERE id = ?').get(id);
+  if (!trip) {
+    return res.status(404).json({ message: 'Trip not found.' });
+  }
+  if (trip.driver_id != req.user.id) { // Use != for potential string/number comparison
+    return res.status(403).json({ message: 'You do not have permission to update this trip\'s location.' });
+  }
+
+  // Optionally, check if trip status is 'on_route' before allowing location updates
+  const tripStatus = db.prepare('SELECT status FROM trips WHERE id = ?').get(id);
+  if (tripStatus.status !== 'on_route') {
+    return res.status(400).json({ message: 'Cannot update location: Trip is not currently on route.' });
+  }
+
+  try {
+    const stmt = db.prepare(`
+      INSERT INTO trip_locations (trip_id, latitude, longitude)
+      VALUES (?, ?, ?)
+    `);
+    stmt.run(id, lat, lng);
+
+    res.json({ message: 'Location updated successfully for trip', tripId: id, location: { lat, lng } });
+  } catch (err) {
+    res.status(500).json({ message: 'Error updating trip location', error: err.message });
+  }
+});
+
 
 // Multer configuration for file uploads
 const storage = multer.diskStorage({
@@ -592,51 +981,6 @@ const upload = multer({
 
 // Serve static files
 app.use('/uploads', express.static(path.join(__dirname, 'uploads')));
-
-app.use('/uploads/driver', express.static(path.join(__dirname, 'uploads/driver')));
-app.use('/uploads/vehicle', express.static(path.join(__dirname, 'uploads/vehicle')));
-
-app.get('/uploads/vehicles/*splatVehicle', (req, res) => {
-  const requestedPath = req.params.splatVehicle; // Gets everything after /uploads/vehicles/
-  const fullPath = path.join(__dirname, 'uploads', 'vehicles', requestedPath);
-
-  // Security check to prevent directory traversal (important!)
-  const allowedDir = path.resolve(path.join(__dirname, 'uploads', 'vehicles'));
-  const resolvedPath = path.resolve(fullPath);
-
-  if (!resolvedPath.startsWith(allowedDir)) {
-    console.log("Attempted directory traversal detected:", req.ip, req.path);
-    return res.status(403).send('Forbidden');
-  }
-
-  res.sendFile(fullPath, (err) => {
-    if (err) {
-      console.error("File not found:", fullPath, err.message);
-      res.status(404).send('File not found');
-    }
-  });
-});
-
-app.get('/uploads/drivers/*splatDriver', (req, res) => {
-  const requestedPath = req.params.splatDriver; // Gets everything after /uploads/drivers/
-  const fullPath = path.join(__dirname, 'uploads', 'drivers', requestedPath);
-
-  // Security check to prevent directory traversal (important!)
-  const allowedDir = path.resolve(path.join(__dirname, 'uploads', 'drivers'));
-  const resolvedPath = path.resolve(fullPath);
-
-  if (!resolvedPath.startsWith(allowedDir)) {
-    console.log("Attempted directory traversal detected:", req.ip, req.path);
-    return res.status(403).send('Forbidden');
-  }
-
-  res.sendFile(fullPath, (err) => {
-    if (err) {
-      console.error("File not found:", fullPath, err.message);
-      res.status(404).send('File not found');
-    }
-  });
-});
 
 // Health check
 app.get('/health', (req, res) => {

@@ -1,26 +1,27 @@
 // src/pages/PassengerDashboard.jsx
+
 import React, { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { useAuth } from '../contexts/AuthContext';
-import MapComponent from '../components/MapComponent';
+import { useAuth } from '../../contexts/AuthContext';
+import MapComponent from '../../components/MapComponent';
 import { Navigation, MapPin, Ticket, Users, Clock, Smartphone } from 'lucide-react';
 
 const PassengerDashboard = () => {
   const navigate = useNavigate();
   const { user, isLogged, loading, logout, getAuthHeader } = useAuth();
-  const [buses, setBuses] = useState([]);
-  const [trips, setTrips] = useState([]);
+  const [buses, setBuses] = useState([]); // Represents trips
+  const [trips, setTrips] = useState([]); // Store trips separately if needed
   const [bookings, setBookings] = useState([]);
   const [selectedBus, setSelectedBus] = useState(null);
-  const [pickupLocation, setPickupLocation] = useState(null);
-  const [dropoffLocation, setDropoffLocation] = useState(null);
+  const [pickupLocation, setPickupLocation] = useState(null); // Will be set when booking
+  const [dropoffLocation, setDropoffLocation] = useState(null); // Will be set when booking
   const [bookingLoading, setBookingLoading] = useState(false);
   const [userLocation, setUserLocation] = useState(null);
   const [locationEnabled, setLocationEnabled] = useState(true);
   const [hasGeolocationError, setHasGeolocationError] = useState(false);
   const [proximityLevel, setProximityLevel] = useState(null); // For highlighting nearby buses
 
-  // Fetch available buses and trips
+  // Fetch available buses (trips) and routes
   useEffect(() => {
     if (!isLogged || !user || user.role !== 'passenger') {
       navigate('/'); // Redirect if not logged in as passenger
@@ -29,47 +30,22 @@ const PassengerDashboard = () => {
 
     const fetchBusesAndTrips = async () => {
       try {
-        // Fetch all active trips
-        const tripsResponse = await fetch('http://localhost:5000/trips', {
+        // Fetch all active trips with locations and approved routes
+        const tripsResponse = await fetch('http://localhost:5000/trips', { // This endpoint already filters for approved routes for passengers
           headers: getAuthHeader(),
         });
         if (!tripsResponse.ok) throw new Error('Failed to fetch trips');
         const tripsData = await tripsResponse.json();
         setTrips(tripsData);
-
-        // Fetch all vehicles to get bus details
-        const vehiclesResponse = await fetch('http://localhost:5000/vehicles', {
-          headers: getAuthHeader(),
-        });
-        if (!vehiclesResponse.ok) throw new Error('Failed to fetch vehicles');
-        const vehiclesData = await vehiclesResponse.json();
-
-        // Combine trip and vehicle data to get bus info with location
-        const busesWithLocation = tripsData
-          .filter(trip => trip.status === 'on_route' || trip.status === 'scheduled') // Only show active/scheduled trips
-          .map(trip => {
-            const vehicle = vehiclesData.find(v => v.id == trip.vehicle_id);
-            return {
-              ...vehicle,
-              current_location: vehicle?.current_location, // Assuming you add this field when updating location
-              trip_info: trip // Include trip details if needed
-            };
-          })
-          .filter(bus => bus.current_location); // Only buses with location
-
-        setBuses(busesWithLocation);
+        setBuses(tripsData); // Buses now represent trips with location info
       } catch (err) {
         console.error('Error fetching data:', err);
-        // Handle error
       }
     };
 
     const fetchPassengerBookings = async () => {
       try {
-        // Assuming you have an endpoint to get bookings for the current user
-        // This might require modifying your backend to filter by passenger_id
-        // For now, let's assume it's available at /bookings/passenger
-        const response = await fetch('http://localhost:5000/bookings/passenger', {
+        const response = await fetch('http://localhost:5000/bookings', {
           headers: getAuthHeader(),
         });
         if (!response.ok) throw new Error('Failed to fetch bookings');
@@ -112,9 +88,6 @@ const PassengerDashboard = () => {
         const lat = position.coords.latitude;
         const lng = position.coords.longitude;
         setUserLocation({ lat, lng });
-
-        // Optional: Update user's location in your system if needed for proximity alerts
-        // This would require a backend endpoint to store passenger location temporarily
       },
       handleGeoError,
       { enableHighAccuracy: true, maximumAge: 10000, timeout: 5000 }
@@ -123,45 +96,47 @@ const PassengerDashboard = () => {
     return () => navigator.geolocation.clearWatch(watchId);
   }, [locationEnabled, hasGeolocationError]);
 
-  // Handle location selection from map click
-  const handleLocationSelect = (location) => {
-    if (!pickupLocation) {
-      setPickupLocation(location);
-    } else if (!dropoffLocation) {
-      setDropoffLocation(location);
-    } else {
-      // If both are set, reset and set new pickup
-      setPickupLocation(location);
-      setDropoffLocation(null);
-    }
-  };
-
-  const handleResetLocations = () => {
-    setPickupLocation(null);
-    setDropoffLocation(null);
-    setSelectedBus(null); // Reset selected bus when locations are reset
+  // Handle bus selection - Fetch route details for the selected bus
+  const handleBusSelect = async (bus) => {
+    setSelectedBus(bus);
+    // Optionally, fetch the specific route details here if not included in the trip data
+    // const routeResponse = await fetch(`http://localhost:5000/routes/${bus.route_id}`, { headers: getAuthHeader() });
+    // if (routeResponse.ok) {
+    //   const routeData = await routeResponse.json();
+    //   // Update bus object with route details if needed
+    // }
   };
 
   const handleBookBus = async () => {
-    if (!selectedBus || !pickupLocation || !dropoffLocation) {
-      alert('Please select a bus and set pickup/dropoff locations.');
+    if (!selectedBus) {
+      alert('Please select a bus first.');
+      return;
+    }
+
+    // Prompt for pickup and dropoff locations when booking
+    const pickupLat = prompt('Enter pickup latitude:');
+    const pickupLng = prompt('Enter pickup longitude:');
+    const dropoffLat = prompt('Enter dropoff latitude:');
+    const dropoffLng = prompt('Enter dropoff longitude:');
+
+    if (!pickupLat || !pickupLng || !dropoffLat || !dropoffLng) {
+      alert('Pickup and dropoff locations are required.');
+      return;
+    }
+
+    const pickupLoc = { lat: parseFloat(pickupLat), lng: parseFloat(pickupLng), name: `Pickup (${pickupLat}, ${pickupLng})` };
+    const dropoffLoc = { lat: parseFloat(dropoffLat), lng: parseFloat(dropoffLng), name: `Dropoff (${dropoffLat}, ${dropoffLng})` };
+
+    // Basic validation
+    if (isNaN(pickupLoc.lat) || isNaN(pickupLoc.lng) || isNaN(dropoffLoc.lat) || isNaN(dropoffLoc.lng)) {
+      alert('Please enter valid numeric coordinates.');
       return;
     }
 
     setBookingLoading(true);
     try {
-      // Find the trip ID for the selected bus
-      const trip = trips.find(t => t.vehicle_id == selectedBus.id && (t.status === 'on_route' || t.status === 'scheduled'));
-      if (!trip) {
-        alert('Selected bus has no active trip.');
-        setBookingLoading(false);
-        return;
-      }
-
       // Find an available seat number (this is a simplification)
-      // You might need a backend endpoint to find an available seat
-      // For now, let's assume seat 1 is available if available_seats > 0
-      if (trip.available_seats <= 0) {
+      if (selectedBus.available_seats <= 0) {
         alert('No seats available on this trip.');
         setBookingLoading(false);
         return;
@@ -169,12 +144,11 @@ const PassengerDashboard = () => {
       const seatNumber = 1; // Simplified
 
       const bookingData = {
-        trip_id: trip.id,
+        trip_id: selectedBus.id,
         passenger_id: user.id,
         seat_number: seatNumber,
-        pickup_location: pickupLocation,
-        dropoff_location: dropoffLocation,
-        // Add other booking details if needed
+        pickup_location: pickupLoc,
+        dropoff_location: dropoffLoc,
       };
 
       const response = await fetch('http://localhost:5000/bookings', {
@@ -193,8 +167,12 @@ const PassengerDashboard = () => {
 
       const result = await response.json();
       alert('Booking confirmed successfully!');
-      setBookings(prev => [...prev, { id: result.bookingId, ...bookingData, status: 'confirmed' }]); // Update local state
-      handleResetLocations(); // Clear selections after booking
+      setBookings(prev => [...prev, { id: result.bookingId, ...bookingData, status: 'confirmed' }]);
+      setBuses(prev => prev.map(b => b.id === selectedBus.id ? { ...b, available_seats: b.available_seats - 1 } : b)); // Update local trip seat count
+      // Reset selection after booking
+      setSelectedBus(null);
+      setPickupLocation(null);
+      setDropoffLocation(null);
 
     } catch (error) {
       console.error('Booking error:', error);
@@ -256,38 +234,24 @@ const PassengerDashboard = () => {
             {/* Booking Panel */}
             <div className="bg-slate-800/50 backdrop-blur-sm rounded-2xl p-6 border border-slate-700">
               <h2 className="text-xl font-semibold mb-4">Book a Bus</h2>
-              {pickupLocation ? (
-                <div className="mb-2 p-2 bg-slate-700 rounded">
-                  <p className="text-sm text-slate-300">Pickup: ({pickupLocation.lat.toFixed(4)}, {pickupLocation.lng.toFixed(4)})</p>
+              {selectedBus ? (
+                <div className="mb-4 p-3 bg-slate-700 rounded">
+                  <p className="font-medium text-white">Selected Bus: {selectedBus.route_name} ({selectedBus.plate_number})</p>
+                  <p className="text-sm text-slate-300">Available Seats: {selectedBus.available_seats}</p>
                 </div>
               ) : (
-                <p className="text-slate-400 text-sm mb-2">Click map to select pickup location</p>
+                <p className="text-slate-400 text-sm mb-4">Select a bus on the map to view details.</p>
               )}
-              {dropoffLocation ? (
-                <div className="mb-4 p-2 bg-slate-700 rounded">
-                  <p className="text-sm text-slate-300">Dropoff: ({dropoffLocation.lat.toFixed(4)}, {dropoffLocation.lng.toFixed(4)})</p>
-                </div>
-              ) : (
-                <p className="text-slate-400 text-sm mb-4">Click map to select dropoff location</p>
-              )}
-              <div className="flex gap-2">
-                <button
-                  onClick={handleResetLocations}
-                  className="flex-1 py-2 px-4 rounded-lg bg-slate-700 hover:bg-slate-600 transition-colors"
-                >
-                  Reset
-                </button>
-                <button
-                  onClick={handleBookBus}
-                  disabled={!selectedBus || !pickupLocation || !dropoffLocation || bookingLoading}
-                  className={`flex-1 py-2 px-4 rounded-lg transition-colors ${!selectedBus || !pickupLocation || !dropoffLocation || bookingLoading
-                    ? 'bg-slate-700 cursor-not-allowed'
-                    : 'bg-gradient-to-r from-cyan-500 to-blue-600 hover:from-cyan-400 hover:to-blue-500'
-                    }`}
-                >
-                  {bookingLoading ? 'Booking...' : 'Book Bus'}
-                </button>
-              </div>
+              <button
+                onClick={handleBookBus}
+                disabled={!selectedBus || bookingLoading}
+                className={`w-full py-2 px-4 rounded-lg transition-colors ${!selectedBus || bookingLoading
+                  ? 'bg-slate-700 cursor-not-allowed'
+                  : 'bg-gradient-to-r from-cyan-500 to-blue-600 hover:from-cyan-400 hover:to-blue-500'
+                  }`}
+              >
+                {bookingLoading ? 'Booking...' : 'Book Selected Bus'}
+              </button>
             </div>
 
             {/* Current Bookings */}
@@ -303,7 +267,7 @@ const PassengerDashboard = () => {
                       <div className="flex items-center justify-between">
                         <div>
                           <p className="font-medium text-white">Booking #{booking.id}</p>
-                          <p className="text-sm text-slate-400">Trip ID: {booking.trip_id}</p>
+                          <p className="text-sm text-slate-400">Trip: {booking.route_name || 'N/A'}</p>
                           <p className="text-xs text-slate-500">Seat: {booking.seat_number}</p>
                         </div>
                         <span className="px-2 py-1 rounded-full text-xs font-medium bg-green-500/20 text-green-400">
@@ -329,12 +293,6 @@ const PassengerDashboard = () => {
                   <span className="text-sm text-slate-400">
                     {buses.filter(b => b.current_location).length} Active
                   </span>
-                  {(pickupLocation || dropoffLocation) && (
-                    <span className="text-sm text-slate-400">
-                      <MapPin className="w-3 h-3 inline mr-1" />
-                      {(pickupLocation ? 1 : 0) + (dropoffLocation ? 1 : 0)}/2
-                    </span>
-                  )}
                 </div>
               </div>
               <div className="h-[calc(100%-50px)] rounded-xl overflow-hidden">
@@ -342,13 +300,15 @@ const PassengerDashboard = () => {
                   role="passenger"
                   buses={buses.map(b => ({ ...b, currentLocation: b.current_location }))}
                   selectedBus={selectedBus}
-                  onBusSelect={setSelectedBus}
-                  onLocationSelect={handleLocationSelect}
+                  onBusSelect={handleBusSelect} // Use the new handler
+                  // Remove onLocationSelect as passenger doesn't select locations directly anymore
+                  // onLocationSelect={handleLocationSelect}
                   pickupLocation={pickupLocation}
                   dropoffLocation={dropoffLocation}
                   userLocation={userLocation}
                   locationEnabled={locationEnabled}
-                  proximityLevel={proximityLevel} // Pass proximity level if implemented
+                  proximityLevel={proximityLevel}
+                  showRouteForSelectedBus={!!selectedBus} // Tell MapComponent to show route if bus is selected
                 />
               </div>
             </div>
@@ -357,11 +317,11 @@ const PassengerDashboard = () => {
               <div className="bg-slate-800/50 backdrop-blur-sm rounded-2xl p-4 border border-slate-700">
                 <div className="flex items-center gap-3">
                   <div className="w-10 h-10 rounded-full bg-cyan-500/20 flex items-center justify-center">
-                    <MapPin className="w-5 h-5 text-cyan-400" />
+                    <Navigation className="w-5 h-5 text-cyan-400" />
                   </div>
                   <div>
-                    <h4 className="font-semibold text-white">Select Locations</h4>
-                    <p className="text-sm text-slate-400">Click map for pickup & dropoff</p>
+                    <h4 className="font-semibold text-white">View Routes</h4>
+                    <p className="text-sm text-slate-400">Click bus to see its route</p>
                   </div>
                 </div>
               </div>
