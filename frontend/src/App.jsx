@@ -4,8 +4,8 @@ import { BrowserRouter, Routes, Route } from "react-router-dom";
 import Hero from "./pages/Hero";
 import AuthDriver from "./pages/auth/AuthDriver";
 import AuthPassenger from "./pages/auth/AuthPassenger";
-import DriverDashboard from "./pages/DriverDashboard"; // Add this import
-import PassengerDashboard from "./pages/PassengerDashboard"; // Add this import
+import DriverDashboard from "./pages/protected/DriverDashboard";
+import PassengerDashboard from "./pages/protected/PassengerDashboard";
 
 function App() {
   return (
