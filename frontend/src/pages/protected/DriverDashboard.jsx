@@ -2,6 +2,7 @@
 import React, { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useAuth } from '../../contexts/AuthContext';
+import { supabase } from '../../lib/supabase';
 import MapComponent from '../../components/MapComponent';
 import { BusFront, Navigation, Users, MapPin, Settings, User, Route, RotateCcw, Plus, ChevronDown, ChevronUp, Menu, X } from 'lucide-react';
 
@@ -83,38 +84,46 @@ const DriverDashboard = () => {
     }
     const fetchData = async () => {
       try {
-        const [busesRes, tripsRes, routesRes] = await Promise.all([
-          fetch('http://localhost:5000/vehicles', { headers: getAuthHeader() }),
-          fetch('http://localhost:5000/trips', { headers: getAuthHeader() }),
-          fetch('http://localhost:5000/routes', { headers: getAuthHeader() })
-        ]);
-        if (!busesRes.ok || !tripsRes.ok || !routesRes.ok) throw new Error('Failed to fetch data');
-        const busesData = await busesRes.json();
-        const tripsData = await tripsRes.json();
-        const routesData = await routesRes.json();
-        const driverBuses = busesData;
-        const driverTrips = tripsData.filter(t => t.driver_id == user.id);
-        const driverRoutes = routesData.filter(r => r.proposed_by_driver_id == user.id);
-        setBuses(driverBuses);
-        setTrips(driverTrips);
-        setAllRoutes(driverRoutes);
-        setApprovedRoutes(driverRoutes.filter(r => r.approved));
-        const activeTrip = driverTrips.find(t => t.status === 'on_route');
+        const { data: busesData, error: busesError } = await supabase
+          .from('vehicles')
+          .select('*')
+          .eq('driver_id', user.id)
+          .eq('approved', true);
+
+        const { data: tripsData, error: tripsError } = await supabase
+          .from('trips')
+          .select('*')
+          .eq('driver_id', user.id);
+
+        const { data: routesData, error: routesError } = await supabase
+          .from('routes')
+          .select('*')
+          .eq('proposed_by_driver_id', user.id);
+
+        if (busesError) throw busesError;
+        if (tripsError) throw tripsError;
+        if (routesError) throw routesError;
+
+        setBuses(busesData || []);
+        setTrips(tripsData || []);
+        setAllRoutes(routesData || []);
+        setApprovedRoutes((routesData || []).filter(r => r.approved));
+
+        const activeTrip = (tripsData || []).find(t => t.status === 'on_route');
         if (activeTrip && !selectedTrip) {
           setSelectedTrip(activeTrip);
           setIsOnline(true);
-          // Auto-expand trip details when active trip is found
           setExpandedSections(prev => ({ ...prev, tripDetails: true }));
         }
-        if (driverBuses.length > 0 && !newTripForm.vehicle_id) {
-          setNewTripForm(prev => ({ ...prev, vehicle_id: driverBuses[0].id.toString() }));
+        if (busesData && busesData.length > 0 && !newTripForm.vehicle_id) {
+          setNewTripForm(prev => ({ ...prev, vehicle_id: busesData[0].id.toString() }));
         }
       } catch (err) {
         console.error('Error fetching driver data:', err);
       }
     };
     fetchData();
-  }, [isLogged, user, navigate, getAuthHeader, selectedTrip, newTripForm.vehicle_id]);
+  }, [isLogged, user, navigate, selectedTrip, newTripForm.vehicle_id]);
 
   useEffect(() => {
     if (!locationEnabled) {
@@ -163,12 +172,13 @@ const DriverDashboard = () => {
     }
     const fetchTripPassengers = async () => {
       try {
-        const response = await fetch(`http://localhost:5000/bookings?trip_id=${selectedTrip.id}`, {
-          headers: getAuthHeader(),
-        });
-        if (!response.ok) throw new Error('Failed to fetch trip passengers');
-        const data = await response.json();
-        setPassengers(data);
+        const { data, error } = await supabase
+          .from('bookings')
+          .select('*')
+          .eq('trip_id', selectedTrip.id);
+
+        if (error) throw error;
+        setPassengers(data || []);
         if (data.length > 0) {
           setExpandedSections(prev => ({ ...prev, passengers: true }));
         }
@@ -178,7 +188,7 @@ const DriverDashboard = () => {
       }
     };
     fetchTripPassengers();
-  }, [selectedTrip, getAuthHeader]);
+  }, [selectedTrip]);
 
   useEffect(() => {
     if (!locationEnabled || !isOnline || !selectedTrip) {
@@ -201,21 +211,19 @@ const DriverDashboard = () => {
       if (!selectedTrip) return;
       const lat = position.coords.latitude;
       const lng = position.coords.longitude;
-      // Update the local userLocation state as well, so the map sees the latest
       setUserLocation({ lat, lng });
 
       try {
-        const response = await fetch(`http://localhost:5000/trips/${selectedTrip.id}/location`, {
-          method: 'POST',
-          headers: {
-            ...getAuthHeader(),
-            'Content-Type': 'application/json',
-          },
-          body: JSON.stringify({ lat, lng }),
-        });
-        if (!response.ok) {
-          const errorData = await response.json();
-          console.error('Failed to update trip location in DB:', errorData.message);
+        const { error } = await supabase
+          .from('trip_locations')
+          .insert({
+            trip_id: selectedTrip.id,
+            latitude: lat,
+            longitude: lng
+          });
+
+        if (error) {
+          console.error('Failed to update trip location in DB:', error.message);
         } else {
           console.log('Trip location updated successfully in DB');
           setTrips(prev => prev.map(t => t.id === selectedTrip.id ? { ...t, current_location: { lat, lng } } : t));
@@ -253,18 +261,13 @@ const DriverDashboard = () => {
     setIsOnline(enabled);
     try {
       const newStatus = enabled ? 'on_route' : 'scheduled';
-      const response = await fetch(`http://localhost:5000/trips/${selectedTrip.id}/status`, {
-        method: 'PUT',
-        headers: {
-          ...getAuthHeader(),
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify({ status: newStatus }),
-      });
-      if (!response.ok) {
-        const errorData = await response.json();
-        throw new Error(errorData.message || 'Failed to update trip status');
-      }
+      const { error } = await supabase
+        .from('trips')
+        .update({ status: newStatus })
+        .eq('id', selectedTrip.id);
+
+      if (error) throw error;
+
       setTrips(prev => prev.map(t => t.id === selectedTrip.id ? { ...t, status: newStatus } : t));
       if (enabled) {
         setSelectedTrip(prev => prev ? { ...prev, status: newStatus } : prev);
@@ -285,30 +288,34 @@ const DriverDashboard = () => {
     try {
       const routeData = {
         route_name: `Route from ${proposedRoute.start.name} to ${proposedRoute.end.name}`,
-        start_location: proposedRoute.start,
-        end_location: proposedRoute.end,
-        distance: 10,
-        estimated_time: 30
+        start_location_name: proposedRoute.start.name,
+        start_location_lat: proposedRoute.start.lat,
+        start_location_lng: proposedRoute.start.lng,
+        end_location_name: proposedRoute.end.name,
+        end_location_lat: proposedRoute.end.lat,
+        end_location_lng: proposedRoute.end.lng,
+        distance: 10, // Placeholder
+        estimated_time: 30, // Placeholder
+        proposed_by_driver_id: user.id
       };
-      const response = await fetch('http://localhost:5000/routes', {
-        method: 'POST',
-        headers: {
-          ...getAuthHeader(),
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify(routeData),
-      });
-      if (!response.ok) {
-        const errorData = await response.json();
-        throw new Error(errorData.message || 'Failed to propose route');
-      }
-      const result = await response.json();
-      alert(result.message);
-      const routesResponse = await fetch('http://localhost:5000/routes', { headers: getAuthHeader() });
-      if (routesResponse.ok) {
-        const routesData = await routesResponse.json();
-        setAllRoutes(routesData.filter(r => r.proposed_by_driver_id == user.id));
-        setApprovedRoutes(routesData.filter(r => r.proposed_by_driver_id == user.id && r.approved));
+
+      const { error } = await supabase
+        .from('routes')
+        .insert(routeData);
+
+      if (error) throw error;
+
+      alert('Route proposal submitted successfully.');
+
+      // Refresh routes
+      const { data: routesData } = await supabase
+        .from('routes')
+        .select('*')
+        .eq('proposed_by_driver_id', user.id);
+
+      if (routesData) {
+        setAllRoutes(routesData);
+        setApprovedRoutes(routesData.filter(r => r.approved));
       }
       handleResetRoute();
     } catch (err) {
@@ -349,26 +356,28 @@ const DriverDashboard = () => {
       const tripData = {
         ...newTripForm,
         route_id: selectedRouteForTrip.id,
+        driver_id: user.id,
+        status: 'scheduled'
       };
-      const response = await fetch('http://localhost:5000/trips', {
-        method: 'POST',
-        headers: {
-          ...getAuthHeader(),
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify(tripData),
-      });
-      if (!response.ok) {
-        const errorData = await response.json();
-        throw new Error(errorData.message || 'Failed to create trip');
-      }
-      const result = await response.json();
+
+      const { error } = await supabase
+        .from('trips')
+        .insert(tripData);
+
+      if (error) throw error;
+
       alert('Trip created successfully!');
-      const tripsResponse = await fetch('http://localhost:5000/trips', { headers: getAuthHeader() });
-      if (tripsResponse.ok) {
-        const tripsData = await tripsResponse.json();
-        setTrips(tripsData.filter(t => t.driver_id == user.id));
+
+      // Refresh trips
+      const { data: tripsData } = await supabase
+        .from('trips')
+        .select('*')
+        .eq('driver_id', user.id);
+
+      if (tripsData) {
+        setTrips(tripsData);
       }
+
       setNewTripForm({
         vehicle_id: buses.length > 0 ? buses[0].id.toString() : '',
         departure_time: '',
@@ -393,23 +402,19 @@ const DriverDashboard = () => {
       const vehicleData = {
         ...newVehicleForm,
         year: parseInt(newVehicleForm.year, 10),
-        capacity: parseInt(newVehicleForm.capacity, 10)
+        capacity: parseInt(newVehicleForm.capacity, 10),
+        proposed_by_driver_id: user.id,
+        driver_id: user.id, // Usually assigned to proposer initially or null? Schema says driver_id refs profiles.
+        approved: false // Default
       };
-      const response = await fetch('http://localhost:5000/vehicles', {
-        method: 'POST',
-        headers: {
-          ...getAuthHeader(),
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify(vehicleData),
-      });
-      if (!response.ok) {
-        const errorData = await response.json();
-        throw new Error(errorData.message || 'Failed to request vehicle');
-      }
-      const result = await response.json();
-      alert(result.message);
-      console.log('Vehicle request submitted:', result);
+
+      const { error } = await supabase
+        .from('vehicles')
+        .insert(vehicleData);
+
+      if (error) throw error;
+
+      alert('Vehicle request submitted successfully. Awaiting approval.');
       setNewVehicleForm({
         plate_number: '',
         make: '',

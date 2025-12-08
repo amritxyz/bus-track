@@ -1,5 +1,6 @@
 // src/components/MapComponent.jsx
 import React, { useEffect, useRef, useState, useMemo } from 'react';
+import { supabase } from '../lib/supabase';
 import { MapContainer, TileLayer, Marker, Popup, useMapEvents, Polyline, Circle } from 'react-leaflet';
 import L from 'leaflet';
 import 'leaflet/dist/leaflet.css'; // Import Leaflet CSS
@@ -87,12 +88,16 @@ const MapComponent = ({
         return;
       }
       try {
-        const response = await fetch(`http://localhost:5000/routes/${selectedBus.route_id}`);
-        if (!response.ok) throw new Error('Failed to fetch route details');
-        const routeData = await response.json();
+        const { data: routeData, error } = await supabase
+          .from('routes')
+          .select('*')
+          .eq('id', selectedBus.route_id)
+          .single();
+
+        if (error) throw error;
         if (cancelled) return;
-        if (routeData.start_location_lat != null && routeData.start_location_lng != null &&
-          routeData.end_location_lat != null && routeData.end_location_lng != null) {
+
+        if (routeData && routeData.start_location_lat != null) {
           setRoutePolyline([
             [routeData.start_location_lat, routeData.start_location_lng],
             [routeData.end_location_lat, routeData.end_location_lng]

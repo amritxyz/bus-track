@@ -1,6 +1,7 @@
 // src/components/auth/AuthForm.jsx
 import { useState } from 'react';
 import { useAuth } from '../../contexts/AuthContext';
+import { useNavigate } from 'react-router-dom';
 
 const AuthForm = ({ mode = 'login', role }) => {
   const [formData, setFormData] = useState({
@@ -10,6 +11,7 @@ const AuthForm = ({ mode = 'login', role }) => {
   });
   const [isSubmitting, setIsSubmitting] = useState(false);
   const { login, register, error } = useAuth();
+  const navigate = useNavigate();
 
   const handleChange = (e) => {
     setFormData({ ...formData, [e.target.name]: e.target.value });
@@ -20,31 +22,29 @@ const AuthForm = ({ mode = 'login', role }) => {
     setIsSubmitting(true);
 
     if (mode === 'login') {
-      // Special handling for admin login
-      let loginRole = role;
-      if (formData.email === 'admin@mail.com' && formData.password === 'admin') {
-        loginRole = 'admin'; // Override role if admin credentials are used
-      }
-
-      const result = await login(formData.email, formData.password, loginRole);
+      const result = await login(formData.email, formData.password);
       if (result.success) {
-        // Redirect based on role
+        // Redirect based on role in metadata
+        const userRole = result.user?.user_metadata?.role || 'passenger';
+
         let redirectPath = '/';
-        if (loginRole === 'driver') {
+        if (userRole === 'driver') {
           redirectPath = '/dashboard/driver';
-        } else if (loginRole === 'passenger') {
+        } else if (userRole === 'passenger') {
           redirectPath = '/dashboard/passenger';
-        } else if (loginRole === 'admin') {
-          redirectPath = '/dashboard/admin'; // Add this route
+        } else if (userRole === 'admin') {
+          redirectPath = '/dashboard/admin';
         }
-        window.location.href = redirectPath;
+
+        // Use navigate for client-side routing instead of window.location
+        // window.location.href = redirectPath; 
+        navigate(redirectPath);
       }
     } else {
-      // Registration logic remains the same
       const result = await register({ ...formData, role });
       if (result.success) {
-        alert('Registration successful! Please log in.');
-        window.location.href = `/auth-${role}`;
+        alert('Registration successful! Please check your email and log in.');
+        navigate(`/auth-${role}`);
       }
     }
 
@@ -140,7 +140,7 @@ const AuthForm = ({ mode = 'login', role }) => {
                 New here?{' '}
                 <button
                   type="button"
-                  onClick={() => (window.location.href = `/auth-${role}?mode=register`)}
+                  onClick={() => navigate(`/auth-${role}?mode=register`)}
                   className="text-cyan-400 hover:underline"
                 >
                   Create an account
@@ -153,7 +153,7 @@ const AuthForm = ({ mode = 'login', role }) => {
             Already have an account?{' '}
             <button
               type="button"
-              onClick={() => (window.location.href = `/auth-${role}`)}
+              onClick={() => navigate(`/auth-${role}`)}
               className="text-cyan-400 hover:underline"
             >
               Sign in

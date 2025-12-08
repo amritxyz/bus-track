@@ -2,6 +2,7 @@
 import React, { useState, useEffect, useMemo } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useAuth } from '../../contexts/AuthContext';
+import { supabase } from '../../lib/supabase';
 import { CheckCircle, XCircle, Clock, User, MapPin, Navigation, BusFront } from 'lucide-react';
 
 const AdminDashboard = () => {
@@ -31,66 +32,35 @@ const AdminDashboard = () => {
     const fetchStats = async () => {
       setStatsLoading(true);
       try {
-        // Attempt to fetch all users to get counts
-        // This endpoint needs to be added to the backend server.js
-        let totalUsers = 0;
-        let activeDrivers = 0;
-        try {
-          const usersResponse = await fetch('http://localhost:5000/users', { headers: getAuthHeader() }); // Add this endpoint on the backend
-          if (usersResponse.ok) {
-            const usersData = await usersResponse.json();
-            totalUsers = usersData.length;
-            activeDrivers = usersData.filter(u => u.role === 'driver').length;
-          } else {
-            console.warn("Failed to fetch user list for stats, defaulting to 0:", usersResponse.status, usersResponse.statusText);
-            // If the /users endpoint doesn't exist or isn't accessible, default counts to 0
-            // Or handle this differently if you have another way to get counts
-            // For now, we'll just log and continue, counts remain 0
-          }
-        } catch (userErr) {
-          console.warn("Error fetching user list for stats, defaulting to 0:", userErr.message);
-          // If fetching users fails, counts remain 0
-        }
+        const { count: totalUsers } = await supabase.from('profiles').select('*', { count: 'exact', head: true });
+        const { count: activeDrivers } = await supabase.from('profiles').select('*', { count: 'exact', head: true }).eq('role', 'driver');
 
+        const { count: activeTrips } = await supabase
+          .from('trips')
+          .select('*', { count: 'exact', head: true })
+          .in('status', ['on_route', 'scheduled']);
 
-        // Fetch all trips to count active ones
-        const tripsResponse = await fetch('http://localhost:5000/trips', { headers: getAuthHeader() });
-        if (!tripsResponse.ok) throw new Error('Failed to fetch trips');
-        const tripsData = await tripsResponse.json();
-        const activeTrips = tripsData.filter(t => t.status === 'on_route' || t.status === 'scheduled').length;
-
-        // Fetch all routes to get counts
-        const routesResponse = await fetch('http://localhost:5000/routes', { headers: getAuthHeader() });
-        if (!routesResponse.ok) throw new Error('Failed to fetch routes');
-        const routesData = await routesResponse.json();
-        const pendingRoutes = routesData.filter(r => r.approved === 0).length;
-        const approvedRoutes = routesData.filter(r => r.approved === 1).length;
-
-        // Fetch pending vehicles (already done separately, but can be counted here too if needed)
-        const vehiclesResponse = await fetch('http://localhost:5000/vehicles?pending=true', { headers: getAuthHeader() });
-        if (!vehiclesResponse.ok) throw new Error('Failed to fetch pending vehicles');
-        const vehiclesData = await vehiclesResponse.json();
-        const pendingVehicles = vehiclesData.length;
+        const { count: pendingRoutes } = await supabase.from('routes').select('*', { count: 'exact', head: true }).eq('approved', false);
+        const { count: approvedRoutes } = await supabase.from('routes').select('*', { count: 'exact', head: true }).eq('approved', true);
+        const { count: pendingVehicles } = await supabase.from('vehicles').select('*', { count: 'exact', head: true }).eq('approved', false);
 
         setStats({
-          totalUsers,
-          activeTrips,
-          activeDrivers,
-          pendingRoutes,
-          pendingVehicles,
-          approvedRoutes
+          totalUsers: totalUsers || 0,
+          activeTrips: activeTrips || 0,
+          activeDrivers: activeDrivers || 0,
+          pendingRoutes: pendingRoutes || 0,
+          pendingVehicles: pendingVehicles || 0,
+          approvedRoutes: approvedRoutes || 0
         });
       } catch (err) {
         console.error('Error fetching stats:', err);
-        // Optionally set error state here
-        // For now, just log and let the UI show 0s if fetching trips/routes/vehicles fails
       } finally {
         setStatsLoading(false);
       }
     };
 
     fetchStats();
-  }, [isLogged, user, navigate, getAuthHeader]);
+  }, [isLogged, user, navigate]);
 
   // Fetch pending vehicles (already done for stats, but state is needed for actions)
   useEffect(() => {
@@ -101,21 +71,28 @@ const AdminDashboard = () => {
 
     const fetchPendingVehicles = async () => {
       try {
-        // Fetch vehicles where approved = 0
-        const response = await fetch('http://localhost:5000/vehicles?pending=true', { // Use the query param added to the backend endpoint
-          headers: getAuthHeader(),
-        });
-        if (!response.ok) throw new Error('Failed to fetch pending vehicles');
-        const data = await response.json();
-        setPendingVehicles(data);
+        const { data, error } = await supabase
+          .from('vehicles')
+          .select('*, driver:proposed_by_driver_id(user_name)')
+          .eq('approved', false);
+
+        if (error) throw error;
+
+        // Flatten
+        const formatted = data.map(v => ({
+          ...v,
+          proposed_by_driver_name: v.driver?.user_name
+        }));
+
+        setPendingVehicles(formatted || []);
       } catch (err) {
         console.error('Error fetching pending vehicles:', err);
-        setPendingVehicles([]); // Reset on error
+        setPendingVehicles([]);
       }
     };
 
     fetchPendingVehicles();
-  }, [isLogged, user, navigate, getAuthHeader]);
+  }, [isLogged, user, navigate]);
 
   // Fetch all routes (already done for stats, but state is needed for actions)
   useEffect(() => {
@@ -125,21 +102,29 @@ const AdminDashboard = () => {
     }
     const fetchAllRoutes = async () => {
       try {
-        // Fetch all routes, backend will handle permissions
-        const response = await fetch('http://localhost:5000/routes', {
-          headers: getAuthHeader(),
-        });
-        if (!response.ok) throw new Error('Failed to fetch routes');
-        const data = await response.json();
-        setAllRoutes(data);
+        const { data, error } = await supabase
+          .from('routes')
+          .select('*, driver:proposed_by_driver_id(user_name)');
+
+        if (error) throw error;
+
+        // Flatten
+        const formatted = data.map(r => ({
+          ...r,
+          proposed_by_driver_name: r.driver?.user_name,
+          // Ensure booleans are handled if legacy used 0/1, Supabase returns true/false
+          approved: r.approved ? 1 : 0
+        }));
+
+        setAllRoutes(formatted || []);
       } catch (err) {
         console.error('Error fetching all routes:', err);
-        setAllRoutes([]); // Reset on error
+        setAllRoutes([]);
       }
     };
 
     fetchAllRoutes();
-  }, [isLogged, user, navigate, getAuthHeader]);
+  }, [isLogged, user, navigate]);
 
   // Calculate pending and approved routes using useMemo for efficiency (redundant now, using stats state)
   const { pendingRoutes, approvedRoutes } = useMemo(() => {
@@ -151,23 +136,20 @@ const AdminDashboard = () => {
   const handleApproveVehicle = async (vehicleId) => {
     setLoadingApproveVehicle(vehicleId);
     try {
-      const response = await fetch(`http://localhost:5000/vehicles/${vehicleId}/approve`, {
-        method: 'PUT',
-        headers: getAuthHeader(),
-      });
+      const { error } = await supabase
+        .from('vehicles')
+        .update({
+          approved: true,
+          approved_at: new Date().toISOString(),
+          approved_by_admin_id: user.id
+        })
+        .eq('id', vehicleId);
 
-      if (!response.ok) {
-        const errorData = await response.json();
-        throw new Error(errorData.message || 'Failed to approve vehicle');
-      }
+      if (error) throw error;
 
-      const result = await response.json();
-      console.log('Vehicle approved:', result);
       alert('Vehicle approved successfully!');
 
-      // Update local state
       setPendingVehicles(prev => prev.filter(v => v.id !== vehicleId));
-      // Update stats
       setStats(prev => ({ ...prev, pendingVehicles: prev.pendingVehicles - 1 }));
 
     } catch (error) {
@@ -182,34 +164,18 @@ const AdminDashboard = () => {
     if (!window.confirm("Are you sure you want to reject this vehicle request?")) {
       return;
     }
-    setLoadingApproveVehicle(vehicleId); // Use same loading state for consistency
+    setLoadingApproveVehicle(vehicleId);
     try {
-      // Assuming the backend has a DELETE endpoint for rejected vehicles
-      // If not, you might need a PUT/PATCH endpoint to mark status as 'rejected'
-      // For now, let's assume a DELETE endpoint exists or a PATCH to update status
-      // Example with DELETE: await fetch(`http://localhost:5000/vehicles/${vehicleId}`, { method: 'DELETE', headers: getAuthHeader() });
-      // Example with PATCH to update status:
-      const response = await fetch(`http://localhost:5000/vehicles/${vehicleId}`, {
-        method: 'PUT',
-        headers: {
-          ...getAuthHeader(),
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify({ status: 'inactive' }) // Or add a new 'rejected' status in DB if needed
-      });
+      const { error } = await supabase
+        .from('vehicles')
+        .delete()
+        .eq('id', vehicleId);
 
-      if (!response.ok) {
-        const errorData = await response.json();
-        throw new Error(errorData.message || 'Failed to reject vehicle');
-      }
+      if (error) throw error;
 
-      const result = await response.json();
-      console.log('Vehicle rejected:', result);
       alert('Vehicle request rejected.');
 
-      // Update local state
       setPendingVehicles(prev => prev.filter(v => v.id !== vehicleId));
-      // Update stats
       setStats(prev => ({ ...prev, pendingVehicles: prev.pendingVehicles - 1 }));
 
     } catch (error) {
@@ -223,22 +189,18 @@ const AdminDashboard = () => {
   const handleApproveRoute = async (routeId) => {
     setLoadingApprove(routeId);
     try {
-      const response = await fetch(`http://localhost:5000/routes/${routeId}/approve`, {
-        method: 'PUT',
-        headers: getAuthHeader(),
-      });
+      const { error } = await supabase
+        .from('routes')
+        .update({
+          approved: true,
+          approved_at: new Date().toISOString(),
+          approved_by_admin_id: user.id
+        })
+        .eq('id', routeId);
 
-      if (!response.ok) {
-        const errorData = await response.json();
-        throw new Error(errorData.message || 'Failed to approve route');
-      }
+      if (error) throw error;
 
-      const result = await response.json();
-      console.log('Route approved:', result);
-
-      // Update local state optimistically
       setAllRoutes(prev => prev.map(r => r.id === routeId ? { ...r, approved: 1, approved_at: new Date().toISOString(), approved_by_admin_id: user.id } : r));
-      // Update stats
       setStats(prev => ({ ...prev, pendingRoutes: prev.pendingRoutes - 1, approvedRoutes: prev.approvedRoutes + 1 }));
 
       alert('Route approved successfully!');
@@ -256,25 +218,16 @@ const AdminDashboard = () => {
       return;
     }
     try {
-      // Assuming the backend has a DELETE endpoint for rejected routes
-      // If not, implement a PATCH to update status if needed
-      const response = await fetch(`http://localhost:5000/routes/${routeId}`, {
-        method: 'DELETE', // Or PUT/PATCH if backend uses a different method
-        headers: getAuthHeader(),
-      });
+      const { error } = await supabase
+        .from('routes')
+        .delete()
+        .eq('id', routeId);
 
-      if (!response.ok) {
-        const errorData = await response.json();
-        throw new Error(errorData.message || 'Failed to reject route');
-      }
+      if (error) throw error;
 
-      const result = await response.json();
-      console.log('Route rejected:', result);
       alert('Route rejected and removed.');
 
-      // Update local state
       setAllRoutes(prev => prev.filter(r => r.id !== routeId));
-      // Update stats
       setStats(prev => ({ ...prev, pendingRoutes: prev.pendingRoutes - 1 }));
 
     } catch (error) {
